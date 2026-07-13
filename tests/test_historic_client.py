@@ -1,6 +1,9 @@
 from datetime import date
 
+import pytest
+
 from custom_components.fuel_predictor_wa.historic_client import (
+    HistoricClient,
     _parse_date,
     month_url,
     parse_csv,
@@ -44,3 +47,50 @@ def test_parse_csv_filters_product_and_normalises() -> None:
 
 def test_parse_csv_no_filter_returns_all() -> None:
     assert len(parse_csv(SAMPLE)) == 3
+
+
+class _FakeResp:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def raise_for_status(self) -> None:
+        return None
+
+    async def text(self) -> str:
+        return self._text
+
+
+class _FakeSession:
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.last_url = None
+
+    def get(self, url, **kwargs):
+        self.last_url = url
+        return _FakeResp(self._text)
+
+
+class _FakeHass:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    async def async_add_executor_job(self, fn, *args):
+        return fn(*args)  # run synchronously in the test
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_month_filters_and_returns_records(monkeypatch) -> None:
+    hass = _FakeHass(SAMPLE)
+    client = HistoricClient.__new__(HistoricClient)
+    client._session = _FakeSession(SAMPLE)
+    client._hass = hass
+
+    records = await client.async_fetch_month(2026, 7, product_description="ULP")
+    assert len(records) == 2
+    assert client._session.last_url.endswith("FuelWatchRetail-07-2026.csv")

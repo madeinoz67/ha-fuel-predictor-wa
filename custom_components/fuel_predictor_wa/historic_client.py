@@ -11,6 +11,8 @@ from datetime import date
 from io import StringIO
 from typing import Any
 
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
 from .const import HISTORIC_CSV_BASE, HISTORIC_CSV_TEMPLATE
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,3 +70,24 @@ def parse_csv(text: str, product_description: str | None = None) -> list[dict[st
             }
         )
     return records
+
+
+class HistoricClient:
+    """Async fetcher for FuelWatch monthly historical CSVs."""
+
+    def __init__(self, hass: Any) -> None:
+        self._hass = hass
+        self._session = async_get_clientsession(hass)
+
+    async def async_fetch_month(
+        self, year: int, month: int, product_description: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Fetch one monthly CSV and return product-filtered records.
+
+        Parsing (~40k rows) runs in the executor so the event loop is not blocked.
+        """
+        url = month_url(year, month)
+        async with self._session.get(url, timeout=60) as resp:
+            resp.raise_for_status()
+            text = await resp.text()
+        return await self._hass.async_add_executor_job(parse_csv, text, product_description)
