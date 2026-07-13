@@ -73,15 +73,21 @@ class FuelPredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
-        """Get the options flow."""
-        return FuelPredictorOptionsFlow(config_entry)
+        """Get the options flow.
+
+        Home Assistant injects ``config_entry`` onto the flow itself — the
+        OptionsFlow constructor must take no arguments and must not assign
+        ``self.config_entry`` (it's a read-only property; assigning raises).
+        """
+        return FuelPredictorOptionsFlow()
 
 
 class FuelPredictorOptionsFlow(config_entries.OptionsFlow):
-    """Options flow for adjusting search config."""
+    """Options flow for adjusting search config.
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+    ``self.config_entry`` is set by Home Assistant when the flow is created;
+    do not override ``__init__`` to accept or assign it.
+    """
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
