@@ -54,8 +54,7 @@ FuelWatch API (today/tmrw) ──► coordinator ──► predictor ──► s
                   history.py (daily append → grows local dataset)
 ```
 
-- **Forecaster**: `numpy` + `pandas` only (no sklearn/onnx) — mirrors
-  [ha-power-predictor](https://github.com/isaacjmannion/ha-power-predictor).
+- **Forecaster**: `numpy` + `pandas` only (no sklearn/onnx).
 - **Client**: vendored async FuelWatch client (`aiohttp`), polled twice daily.
 - **`iot_class`**: `cloud_polling`.
 

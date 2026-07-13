@@ -17,7 +17,7 @@ day to buy fuel in WA over 7 days using the FuelWatch dataset.
 ## Architecture rules
 
 - **Forecaster must stay numpy/pandas only** (no sklearn/onnx/torch) — keeps the
-  HA `requirements` minimal, mirroring `isaacjmannion/ha-power-predictor`.
+  HA `requirements` minimal.
 - **Live API client is vendored** in `fuelwatch.py` (async, `aiohttp`). Do NOT
   depend on the `fuelwatcher` PyPI package — it's thin, sync, and unmaintained.
 - **History is two-tier**: bulk CSV seeds training (offline, `tools/`); the live
