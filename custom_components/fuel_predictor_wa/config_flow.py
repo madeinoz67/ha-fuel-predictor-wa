@@ -1,4 +1,5 @@
 """Config flow for Fuel Predictor WA."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -31,9 +32,9 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_RADIUS_KM, default=DEFAULT_RADIUS_KM): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=100)
         ),
-        vol.Optional(
-            CONF_FORECAST_HORIZON_DAYS, default=DEFAULT_FORECAST_HORIZON_DAYS
-        ): vol.All(vol.Coerce(int), vol.Range(min=2, max=14)),
+        vol.Optional(CONF_FORECAST_HORIZON_DAYS, default=DEFAULT_FORECAST_HORIZON_DAYS): vol.All(
+            vol.Coerce(int), vol.Range(min=2, max=14)
+        ),
         vol.Optional(CONF_STATION_LIMIT, default=DEFAULT_STATION_LIMIT): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=20)
         ),
@@ -87,9 +88,9 @@ class FuelPredictorOptionsFlow(config_entries.OptionsFlow):
         data = self.config_entry.data
         schema = vol.Schema(
             {
-                vol.Required(
-                    CONF_PRODUCT, default=data.get(CONF_PRODUCT, DEFAULT_PRODUCT)
-                ): vol.In(PRODUCTS),
+                vol.Required(CONF_PRODUCT, default=data.get(CONF_PRODUCT, DEFAULT_PRODUCT)): vol.In(
+                    PRODUCTS
+                ),
                 vol.Required(CONF_SUBURB, default=data.get(CONF_SUBURB, "")): str,
                 vol.Optional(
                     CONF_SURROUNDING, default=data.get(CONF_SURROUNDING, DEFAULT_SURROUNDING)

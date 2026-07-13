@@ -4,13 +4,14 @@ The bulk CSV comes from data.wa.gov.au (see tools/download_history.py). Column
 names are detected tolerantly — confirm them against the actual header on first
 download and extend the candidate lists below if needed.
 """
+
 from __future__ import annotations
 
 import csv
 import logging
+from collections.abc import Iterable
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable
 
 _LOGGER = logging.getLogger(__name__)
 

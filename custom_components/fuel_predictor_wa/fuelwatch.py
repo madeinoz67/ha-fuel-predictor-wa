@@ -4,16 +4,16 @@ The public FuelWatch service exposes the same data as the RSS feed
 (https://www.fuelwatch.wa.gov.au/tools/rss) — daily prices fixed per day; only
 ``today`` and ``tomorrow`` (lodged by ~14:00 AWST) are available.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any
-
 import xml.etree.ElementTree as ET
+from typing import Any
 
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import FUELWATCH_DAY_TOMORROW, FUELWATCH_DAY_TODAY, FUELWATCH_ENDPOINT
+from .const import FUELWATCH_DAY_TODAY, FUELWATCH_DAY_TOMORROW, FUELWATCH_ENDPOINT
 
 _LOGGER = logging.getLogger(__name__)
 

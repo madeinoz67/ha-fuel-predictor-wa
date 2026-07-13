@@ -7,6 +7,7 @@ since Jan 2001 — used to seed the forecaster so predictions work from day one.
 Run from the repo root:
     python tools/download_history.py --out data/fuelwatch_history.csv
 """
+
 from __future__ import annotations
 
 import argparse
@@ -51,10 +52,7 @@ def main() -> None:
     resource = max(matches, key=lambda r: r.get("size") or 0)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    print(
-        f"Downloading {resource.get('name')} "
-        f"({resource.get('size')} bytes) -> {out_path}"
-    )
+    print(f"Downloading {resource.get('name')} ({resource.get('size')} bytes) -> {out_path}")
     urllib.request.urlretrieve(resource["url"], out_path)  # noqa: S310 — public URL
     print("Done. Verify the CSV header against history.py column detection.")
 

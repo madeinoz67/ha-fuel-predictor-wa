@@ -4,6 +4,7 @@ Seasonal baseline: per-product weekday mean + recent level. Deliberately
 lightweight (no sklearn/onnx) to keep HA requirements minimal. The fit/predict contract is stable so a
 stronger model can replace the internals later (see tools/train.py).
 """
+
 from __future__ import annotations
 
 import logging
@@ -73,7 +74,8 @@ class FuelPricePredictor:
                 points.append(DayForecast(day, float(known[day]), "known"))
             elif self._fitted:
                 level = self._recent_mean or self._overall_mean
-                seasonal = (self._weekday_mean[day.weekday()] or self._overall_mean) - self._overall_mean
+                wd_mean = self._weekday_mean[day.weekday()] or self._overall_mean
+                seasonal = wd_mean - self._overall_mean
                 points.append(DayForecast(day, max(0.0, level + seasonal), "forecast"))
             else:
                 points.append(DayForecast(day, None, "forecast"))

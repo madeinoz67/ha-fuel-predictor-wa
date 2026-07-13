@@ -1,4 +1,5 @@
 """DataUpdateCoordinator: poll FuelWatch + run the predictor."""
+
 from __future__ import annotations
 
 import logging
@@ -62,9 +63,7 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> dict:
         """Fetch live prices + produce forecast + cheapest-stations list."""
         try:
-            today = await self.client.async_fetch_today(
-                self.product, self.suburb, self.surrounding
-            )
+            today = await self.client.async_fetch_today(self.product, self.suburb, self.surrounding)
             try:
                 tomorrow = await self.client.async_fetch_tomorrow(
                     self.product, self.suburb, self.surrounding
@@ -88,8 +87,8 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         points = self.predictor.predict(today_date, self.horizon, known)
         forecast = ForecastResult(points=points, cheapest_day=FuelPricePredictor.cheapest(points))
 
-        stations_sorted = sorted(
-            today, key=lambda s: s.get("price", float("inf"))
-        )[: self.station_limit]
+        stations_sorted = sorted(today, key=lambda s: s.get("price", float("inf")))[
+            : self.station_limit
+        ]
 
         return {"forecast": forecast, "today": stations_sorted}

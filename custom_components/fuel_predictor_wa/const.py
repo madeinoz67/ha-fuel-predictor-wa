@@ -5,6 +5,7 @@ Western Australia's FuelWatch scheme: retailers must lodge next-day prices by
 the day — no intraday movement. The public API therefore only ever serves
 ``today`` and ``tomorrow``; longer horizons must be forecast.
 """
+
 from __future__ import annotations
 
 # --- Integration identity -------------------------------------------------

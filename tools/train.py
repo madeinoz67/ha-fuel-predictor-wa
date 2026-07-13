@@ -7,6 +7,7 @@ the live integration can load them without retraining on the HA host.
 Run from the repo root:
     python tools/train.py --history data/fuelwatch_history.csv
 """
+
 from __future__ import annotations
 
 import argparse

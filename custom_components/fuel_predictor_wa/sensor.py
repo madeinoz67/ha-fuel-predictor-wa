@@ -1,4 +1,5 @@
 """Sensor platform for Fuel Predictor WA."""
+
 from __future__ import annotations
 
 import logging
@@ -12,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, UNIT_CENTS_PER_LITRE
 from .coordinator import FuelPredictorDataUpdateCoordinator
+from .predictor import ForecastResult
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,9 +37,7 @@ class _FuelPredictorEntity(CoordinatorEntity[FuelPredictorDataUpdateCoordinator]
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_key: str = ""
 
-    def __init__(
-        self, coordinator: FuelPredictorDataUpdateCoordinator, entry: ConfigEntry
-    ) -> None:
+    def __init__(self, coordinator: FuelPredictorDataUpdateCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_{self._attr_key}"
 
@@ -56,7 +56,7 @@ class CheapestDaySensor(_FuelPredictorEntity):
 
     @property
     def native_value(self) -> float | None:
-        result: ForecastResult | None = self._data.get("forecast")  # type: ignore[name-defined]
+        result: ForecastResult | None = self._data.get("forecast")
         if result and result.cheapest_price is not None:
             return round(result.cheapest_price, 1)
         return None

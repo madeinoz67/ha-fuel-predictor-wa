@@ -4,6 +4,7 @@ Predicts the cheapest day to buy fuel in Western Australia over a 7-day horizon
 using the legislated FuelWatch dataset, and lists today's cheapest nearby
 stations.
 """
+
 from __future__ import annotations
 
 import logging

@@ -1,4 +1,5 @@
 """Unit tests for the baseline forecaster (no HA runtime needed)."""
+
 from __future__ import annotations
 
 from datetime import date, timedelta
@@ -23,19 +24,14 @@ def test_cheapest_picks_minimum_priced_day() -> None:
     predictor = FuelPricePredictor()
     known = {START: 189.9, START + timedelta(days=1): 175.0}
     points = predictor.predict(START, 2, known)
-    result = ForecastResult(
-        points=points, cheapest_day=FuelPricePredictor.cheapest(points)
-    )
+    result = ForecastResult(points=points, cheapest_day=FuelPricePredictor.cheapest(points))
     assert result.cheapest_day.day == START + timedelta(days=1)
     assert result.cheapest_price == 175.0
 
 
 def test_fit_then_forecast_produces_priced_points() -> None:
     predictor = FuelPricePredictor()
-    history = {
-        (date(2026, 6, 1) + timedelta(days=i)): 180.0 + (i % 7)
-        for i in range(40)
-    }
+    history = {(date(2026, 6, 1) + timedelta(days=i)): 180.0 + (i % 7) for i in range(40)}
     predictor.fit(history)
     assert predictor._fitted  # noqa: SLF001
 
