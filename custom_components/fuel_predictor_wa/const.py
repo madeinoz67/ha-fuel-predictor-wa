@@ -87,8 +87,6 @@ PRODUCT_CSV_DESCRIPTION: dict[int, str] = {
 HISTORY_MONTHS_TARGET = 24
 MIN_MONTHS_TO_TRAIN = 3
 RETRAIN_INTERVAL_DAYS = 30
-TRAIN_RETRY_BACKOFF_HOURS = 1
-TRAIN_RETRY_MAX = 24
 
 # --- Storage (under HA config dir: <config>/fuel_predictor_wa/<entry_id>/) ---
 STORAGE_DIRNAME = "fuel_predictor_wa"
@@ -97,7 +95,6 @@ HISTORY_SUBDIR = "history"
 
 # --- Status states (status diagnostic sensor) ---
 STATUS_UNTRAINED = "untrained"
-STATUS_WARMING_UP = "warming_up"
 STATUS_TRAINING = "training"
 STATUS_RETRAINING = "retraining"
 STATUS_READY = "ready"

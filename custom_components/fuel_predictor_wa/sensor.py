@@ -121,6 +121,8 @@ class StatusSensor(_FuelPredictorEntity):
     _attr_key = "status"
     _attr_name = "Training status"
     _attr_icon = "mdi:brain"
+    # A string state must not be MEASUREMENT (HA logs a repair issue otherwise).
+    _attr_state_class = None
 
     @property
     def native_value(self) -> str | None:

@@ -30,9 +30,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     if not hass.services.has_service(DOMAIN, "retrain"):
+
         async def _handle_retrain(_call: ServiceCall) -> None:
             """Request a retrain on every loaded entry's coordinator."""
-            for coord in hass.data[DOMAIN].values():
+            for coord in list(hass.data[DOMAIN].values()):
                 await coord.async_request_retrain()
 
         hass.services.async_register(DOMAIN, "retrain", _handle_retrain)

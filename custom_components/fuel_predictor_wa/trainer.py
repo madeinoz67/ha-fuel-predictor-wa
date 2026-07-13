@@ -1,4 +1,5 @@
 """On-device trainer: fetch N monthly CSVs -> fit -> pickle artifact."""
+
 from __future__ import annotations
 
 import logging
@@ -47,12 +48,19 @@ def save_model(predictor: FuelPricePredictor, storage_dir: Path) -> Path:
 def load_model(artifact: Path) -> FuelPricePredictor | None:
     if not artifact.exists():
         return None
-    with artifact.open("rb") as fh:
-        data = pickle.load(fh)  # noqa: S301 — our own trusted artifact
-    if data.get("version") != MODEL_VERSION:
-        _LOGGER.warning("Model artifact version mismatch: %s", data.get("version"))
+    try:
+        with artifact.open("rb") as fh:
+            data = pickle.load(fh)  # noqa: S301 — our own trusted artifact
+    except (OSError, pickle.PickleError, EOFError) as err:
+        _LOGGER.warning("Ignoring unreadable model artifact %s: %s", artifact, err)
         return None
-    return data["predictor"]
+    if not isinstance(data, dict) or data.get("version") != MODEL_VERSION:
+        _LOGGER.warning(
+            "Model artifact version mismatch: %s",
+            data.get("version") if isinstance(data, dict) else type(data),
+        )
+        return None
+    return data.get("predictor")
 
 
 async def assemble_and_train(
@@ -74,7 +82,5 @@ async def assemble_and_train(
             fetched += 1
             records.extend(month_records)
     if fetched < MIN_MONTHS_TO_TRAIN:
-        raise RuntimeError(
-            f"training needs >= {MIN_MONTHS_TO_TRAIN} months, got {fetched}"
-        )
+        raise RuntimeError(f"training needs >= {MIN_MONTHS_TO_TRAIN} months, got {fetched}")
     return fit_predictor(series_from_records(records))

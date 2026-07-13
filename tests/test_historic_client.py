@@ -16,6 +16,7 @@ SAMPLE = (
     "01/07/2026,53 Mile Roadhouse,United,ULP,183.90,31 South Western Hwy,PINJARRA,6208,Murray,Peel\r\n"  # noqa: E501
     "01/07/2026,53 Mile Roadhouse,United,Diesel,209.90,31 South Western Hwy,PINJARRA,6208,Murray,Peel\r\n"  # noqa: E501
     "02/07/2026,Caltex,Ampol,ULP,185.00,1 Main St,BUNBURY,6230,Bunbury,South West\r\n"
+    "03/07/2026,BadCo,BadBrand,ULP,,1 Bad St,BADPLACE,6000,BadArea,BadRegion\r\n"  # malformed: blank price -> skipped  # noqa: E501
 )
 
 
@@ -28,7 +29,11 @@ def test_month_url_format() -> None:
 
 def test_trailing_months_wraps_year() -> None:
     assert trailing_months(date(2026, 3, 1), 5) == [
-        (2026, 3), (2026, 2), (2026, 1), (2025, 12), (2025, 11)
+        (2026, 3),
+        (2026, 2),
+        (2026, 1),
+        (2025, 12),
+        (2025, 11),
     ]
 
 
@@ -40,13 +45,25 @@ def test_parse_csv_filters_product_and_normalises() -> None:
     ulp = parse_csv(SAMPLE, product_description="ULP")
     assert len(ulp) == 2
     assert ulp[0] == {
-        "date": date(2026, 7, 1), "price": 183.9, "product": "ULP",
-        "suburb": "PINJARRA", "region": "Peel",
+        "date": date(2026, 7, 1),
+        "price": 183.9,
+        "product": "ULP",
+        "suburb": "PINJARRA",
+        "region": "Peel",
     }
 
 
 def test_parse_csv_no_filter_returns_all() -> None:
     assert len(parse_csv(SAMPLE)) == 3
+
+
+def test_parse_csv_skips_malformed_rows() -> None:
+    # SAMPLE contains a malformed ULP row with a blank price (03/07/2026);
+    # it must be skipped while the valid rows are kept.
+    ulp = parse_csv(SAMPLE, product_description="ULP")
+    prices = [r["price"] for r in ulp]
+    assert prices == [183.9, 185.0]
+    assert len(ulp) == 2
 
 
 class _FakeResp:

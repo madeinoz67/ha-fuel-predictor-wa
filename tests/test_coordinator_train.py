@@ -23,9 +23,7 @@ def _entry_data():
 
 
 @pytest.mark.asyncio
-async def test_first_refresh_trains_and_marks_ready(
-    hass, tmp_path, monkeypatch
-) -> None:
+async def test_first_refresh_trains_and_marks_ready(hass, tmp_path, monkeypatch) -> None:
     """With no artifact and a stubbed fetch, first refresh ends status=ready."""
     hass.config.config_dir = str(tmp_path)
 
@@ -50,12 +48,17 @@ async def test_first_refresh_trains_and_marks_ready(
 
     # Stub the trainer so it does not hit the network.
     async def _fake_fetch(year, month):
-        return [{"date": date(year, month, 1), "price": 180.0,
-                 "product": "ULP", "suburb": "BUNBURY", "region": "South West"}]
+        return [
+            {
+                "date": date(year, month, 1),
+                "price": 180.0,
+                "product": "ULP",
+                "suburb": "BUNBURY",
+                "region": "South West",
+            }
+        ]
 
-    monkeypatch.setattr(
-        coord, "_build_fetch_month", lambda: _fake_fetch
-    )
+    monkeypatch.setattr(coord, "_build_fetch_month", lambda: _fake_fetch)
 
     await coord.async_refresh()
     await hass.async_block_till_done()  # let the spawned trainer task finish
@@ -73,8 +76,7 @@ class _StubClient:
     """Replaces FuelWatchClient so no live HTTP happens during the test."""
 
     async def async_fetch_today(self, *a, **k):
-        return [{"price": 185.0, "brand": "Ampol", "location": "BUNBURY",
-                 "address": "1 Main St"}]
+        return [{"price": 185.0, "brand": "Ampol", "location": "BUNBURY", "address": "1 Main St"}]
 
     async def async_fetch_tomorrow(self, *a, **k):
         return []

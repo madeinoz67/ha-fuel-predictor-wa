@@ -20,7 +20,6 @@ from .const import (
     DEFAULT_STATION_LIMIT,
     DEFAULT_SURROUNDING,
     DOMAIN,
-    HISTORY_FILENAME,
     MODEL_FILENAME,
     PRODUCT_CSV_DESCRIPTION,
     STATUS_ERROR,
@@ -32,13 +31,10 @@ from .const import (
 )
 from .fuelwatch import FuelWatchClient
 from .historic_client import HistoricClient
-from .history import load_history, window
 from .predictor import ForecastResult, FuelPricePredictor
 from .trainer import assemble_and_train, load_model, save_model
 
 _LOGGER = logging.getLogger(__name__)
-
-HISTORY_LOOKBACK_DAYS = 365
 
 
 class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
@@ -56,12 +52,8 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         self.product: int = data[CONF_PRODUCT]
         self.suburb: str = data[CONF_SUBURB]
         self.surrounding: bool = data.get(CONF_SURROUNDING, DEFAULT_SURROUNDING)
-        self.horizon: int = data.get(
-            CONF_FORECAST_HORIZON_DAYS, DEFAULT_FORECAST_HORIZON_DAYS
-        )
-        self.station_limit: int = data.get(
-            CONF_STATION_LIMIT, DEFAULT_STATION_LIMIT
-        )
+        self.horizon: int = data.get(CONF_FORECAST_HORIZON_DAYS, DEFAULT_FORECAST_HORIZON_DAYS)
+        self.station_limit: int = data.get(CONF_STATION_LIMIT, DEFAULT_STATION_LIMIT)
 
         self.client = FuelWatchClient(hass)
         self.predictor = FuelPricePredictor()
@@ -97,10 +89,9 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
             return
         self._train_in_progress = True
         self.status = STATUS_TRAINING
+        self.async_update_listeners()
         try:
-            predictor = await assemble_and_train(
-                self._build_fetch_month(), date.today()
-            )
+            predictor = await assemble_and_train(self._build_fetch_month(), date.today())
             save_model(predictor, self._storage_dir())
             self.predictor = predictor
             self.status = STATUS_READY
@@ -108,6 +99,7 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("background training failed: %s", err)
             self.status = STATUS_ERROR
+            self.async_update_listeners()
         finally:
             self._train_in_progress = False
 
@@ -115,17 +107,9 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         await self._async_train_background(retrain=True)
 
     # --- refresh ---------------------------------------------------------
-    def _fit_from_local_history(self) -> None:
-        path = self.hass.config.path(HISTORY_FILENAME)
-        rows = load_history(path)
-        if rows:
-            self.predictor.fit(window(rows, HISTORY_LOOKBACK_DAYS))
-
     async def _async_update_data(self) -> dict:
         try:
-            today = await self.client.async_fetch_today(
-                self.product, self.suburb, self.surrounding
-            )
+            today = await self.client.async_fetch_today(self.product, self.suburb, self.surrounding)
             try:
                 tomorrow = await self.client.async_fetch_tomorrow(
                     self.product, self.suburb, self.surrounding
@@ -150,10 +134,8 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
             self.hass.async_create_task(self._async_train_background())
 
         points = self.predictor.predict(today_date, self.horizon, known)
-        forecast = ForecastResult(
-            points=points, cheapest_day=FuelPricePredictor.cheapest(points)
-        )
-        stations_sorted = sorted(
-            today, key=lambda s: s.get("price", float("inf"))
-        )[: self.station_limit]
+        forecast = ForecastResult(points=points, cheapest_day=FuelPricePredictor.cheapest(points))
+        stations_sorted = sorted(today, key=lambda s: s.get("price", float("inf")))[
+            : self.station_limit
+        ]
         return {"forecast": forecast, "today": stations_sorted}

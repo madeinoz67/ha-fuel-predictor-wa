@@ -3,6 +3,7 @@
 Monthly files have a deterministic URL — no enumeration API is needed. Files are
 NOT filterable, so callers stream/parse and filter client-side by product.
 """
+
 from __future__ import annotations
 
 import csv
@@ -11,6 +12,7 @@ from datetime import date
 from io import StringIO
 from typing import Any
 
+import aiohttp
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import HISTORIC_CSV_BASE, HISTORIC_CSV_TEMPLATE
@@ -87,7 +89,7 @@ class HistoricClient:
         Parsing (~40k rows) runs in the executor so the event loop is not blocked.
         """
         url = month_url(year, month)
-        async with self._session.get(url, timeout=60) as resp:
+        async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
             resp.raise_for_status()
             text = await resp.text()
         return await self._hass.async_add_executor_job(parse_csv, text, product_description)

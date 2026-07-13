@@ -1,3 +1,4 @@
+import pickle
 from datetime import date, timedelta
 
 import pytest
@@ -36,8 +37,15 @@ def test_save_then_load_roundtrips(monkeypatch, tmp_path) -> None:
 
 async def _fake_fetch_all_ulp(year: int, month: int):
     """Fake fetcher returning one synthetic ULP record per call."""
-    return [{"date": date(year, month, 1), "price": 180.0 + (month % 7),
-             "product": "ULP", "suburb": "X", "region": "R"}]
+    return [
+        {
+            "date": date(year, month, 1),
+            "price": 180.0 + (month % 7),
+            "product": "ULP",
+            "suburb": "X",
+            "region": "R",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -55,3 +63,17 @@ async def test_assemble_and_train_raises_when_too_few_months() -> None:
 
     with pytest.raises(RuntimeError):
         await assemble_and_train(fetch_none, date(2026, 7, 1), months=5)
+
+
+def test_load_model_version_mismatch_returns_none(tmp_path) -> None:
+    series = {date(2026, 1, 1): 180.0}
+    predictor = fit_predictor(series)
+    artifact = tmp_path / MODEL_FILENAME
+    artifact.write_bytes(pickle.dumps({"version": 999, "predictor": predictor}))
+    assert load_model(artifact) is None
+
+
+def test_load_model_corrupt_bytes_returns_none(tmp_path) -> None:
+    artifact = tmp_path / MODEL_FILENAME
+    artifact.write_bytes(b"not a pickle - garbage bytes \x00\xff")
+    assert load_model(artifact) is None
