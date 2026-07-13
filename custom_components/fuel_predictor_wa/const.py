@@ -87,6 +87,7 @@ PRODUCT_CSV_DESCRIPTION: dict[int, str] = {
 # --- On-install training tuning ---
 HISTORY_MONTHS_TARGET = 24
 MIN_MONTHS_TO_TRAIN = 3
+MIN_MONTHS_FULL_MODEL = 6  # gates the full HGBR path (~3 cycles min for stable cycle detection)
 RETRAIN_INTERVAL_DAYS = 30
 
 # --- Storage (under HA config dir: <config>/fuel_predictor_wa/<entry_id>/) ---

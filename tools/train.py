@@ -11,7 +11,6 @@ Run from the repo root:
 from __future__ import annotations
 
 import argparse
-import pickle
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -20,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from custom_components.fuel_predictor_wa.history import load_history  # noqa: E402
 from custom_components.fuel_predictor_wa.predictor import FuelPricePredictor  # noqa: E402
+from custom_components.fuel_predictor_wa.trainer import save_model  # noqa: E402
 
 
 def main() -> None:
@@ -50,16 +50,12 @@ def main() -> None:
             continue
         predictor = FuelPricePredictor()
         predictor.fit(series)
-        artifact = out_dir / f"predictor_{product}.pkl"
-        with artifact.open("wb") as fh:
-            pickle.dump(
-                {
-                    "weekday_mean": predictor._weekday_mean,  # noqa: SLF001
-                    "overall_mean": predictor._overall_mean,  # noqa: SLF001
-                    "recent_mean": predictor._recent_mean,  # noqa: SLF001
-                },
-                fh,
-            )
+        # Each product gets its own subdir: save_model writes a fixed
+        # MODEL_FILENAME inside it, so the v2 artifact shape (version +
+        # predictor + sklearn_version + model_kind) is produced uniformly
+        # with the live integration's load_model path.
+        product_dir = out_dir / f"product_{product}"
+        artifact = save_model(predictor, product_dir)
         print(f"trained product {product}: {len(series)} rows -> {artifact}")
 
 

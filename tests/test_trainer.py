@@ -84,3 +84,75 @@ def test_load_model_corrupt_bytes_returns_none(tmp_path) -> None:
     artifact = tmp_path / MODEL_FILENAME
     artifact.write_bytes(b"not a pickle - garbage bytes \x00\xff")
     assert load_model(artifact) is None
+
+
+# --- Artifact v2: sklearn-version guard + executor-offloaded fit --------------
+
+
+def _series_for_fit() -> dict:
+    """40 days of a 7-day sawtooth -> ridge_degraded tier (sklearn path)."""
+    return {date(2026, 1, 1) + timedelta(days=i): 180.0 + (i % 7) for i in range(40)}
+
+
+def test_save_load_version_2_roundtrips(tmp_path) -> None:
+    predictor = fit_predictor(_series_for_fit())
+    assert predictor._fitted  # noqa: SLF001
+
+    artifact = save_model(predictor, tmp_path)
+    # Raw artifact shape: v2 dict with sklearn_version + model_kind.
+    with artifact.open("rb") as fh:
+        raw = pickle.load(fh)
+    assert raw["version"] == 2
+    assert raw["sklearn_version"] is not None
+    assert raw["model_kind"] == predictor._model_kind  # noqa: SLF001
+
+    loaded = load_model(artifact)
+    assert loaded is not None
+    assert loaded._fitted  # noqa: SLF001
+    assert loaded._model_kind == predictor._model_kind  # noqa: SLF001
+
+
+def test_load_rejects_version_1_artifact(tmp_path) -> None:
+    predictor = fit_predictor(_series_for_fit())
+    artifact = tmp_path / MODEL_FILENAME
+    artifact.write_bytes(pickle.dumps({"version": 1, "predictor": predictor}))
+    assert load_model(artifact) is None
+
+
+def test_load_rejects_sklearn_version_drift(tmp_path) -> None:
+    try:
+        import sklearn  # noqa: F401
+    except ImportError:
+        pytest.skip("sklearn not importable on this environment")
+    predictor = fit_predictor(_series_for_fit())
+    artifact = tmp_path / MODEL_FILENAME
+    artifact.write_bytes(
+        pickle.dumps(
+            {
+                "version": 2,
+                "predictor": predictor,
+                "sklearn_version": "0.0.0",
+                "model_kind": "ridge_degraded",
+            }
+        )
+    )
+    assert load_model(artifact) is None
+
+
+@pytest.mark.asyncio
+async def test_assemble_and_train_uses_executor() -> None:
+    calls: list[tuple] = []
+
+    async def fake_executor(fn, *args):
+        calls.append((fn.__name__, args))
+        return fn(*args)
+
+    predictor = await assemble_and_train(
+        _fake_fetch_all_ulp,
+        date(2026, 7, 1),
+        months=MIN_MONTHS_TO_TRAIN + 1,
+        executor=fake_executor,
+    )
+    assert predictor._fitted  # noqa: SLF001
+    assert len(calls) == 1
+    assert calls[0][0] == "fit_predictor"
