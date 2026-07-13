@@ -26,7 +26,11 @@ async def async_setup_entry(
     """Set up Fuel Predictor WA sensors."""
     coordinator: FuelPredictorDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        [CheapestDaySensor(coordinator, entry), CheapestStationTodaySensor(coordinator, entry)]
+        [
+            CheapestDaySensor(coordinator, entry),
+            CheapestStationTodaySensor(coordinator, entry),
+            StatusSensor(coordinator, entry),
+        ]
     )
 
 
@@ -109,3 +113,15 @@ class CheapestStationTodaySensor(_FuelPredictorEntity):
                 for s in today
             ],
         }
+
+
+class StatusSensor(_FuelPredictorEntity):
+    """Diagnostic sensor exposing the training lifecycle state."""
+
+    _attr_key = "status"
+    _attr_name = "Training status"
+    _attr_icon = "mdi:brain"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.status

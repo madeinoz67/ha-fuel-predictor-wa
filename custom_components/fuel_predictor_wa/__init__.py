@@ -11,7 +11,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 
 from .const import DOMAIN
 from .coordinator import FuelPredictorDataUpdateCoordinator
@@ -28,6 +28,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    if not hass.services.has_service(DOMAIN, "retrain"):
+        async def _handle_retrain(_call: ServiceCall) -> None:
+            """Request a retrain on every loaded entry's coordinator."""
+            for coord in hass.data[DOMAIN].values():
+                await coord.async_request_retrain()
+
+        hass.services.async_register(DOMAIN, "retrain", _handle_retrain)
+
     return True
 
 
