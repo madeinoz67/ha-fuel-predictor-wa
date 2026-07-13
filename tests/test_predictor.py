@@ -122,6 +122,59 @@ def test_offset_calibration_pins_level_to_known_anchor() -> None:
     )
 
 
+def test_empirical_fade_makes_forecast_curve_discriminate_cheapest_day() -> None:
+    """Regression test for the cheapest-day signal (the ML6 fix).
+
+    The offset-calibrated GBM produced a nearly-flat forecast curve on real
+    WA data (cycle_pos went out-of-distribution at predict time), so the
+    argmin was noise and cheapest_day_hit_rate sat at the random floor. The
+    empirical-fade-anchored forecast must (a) NOT be flat across forecast
+    days and (b) put the trough (cheapest day) at max cycle_pos -- the day
+    deepest into the fade from a peak anchor.
+    """
+    predictor = FuelPricePredictor()
+    # Clear 7-day cycle: peak 180 at cp=0, monotone fade to trough 168 at cp=6.
+    week = [180.0, 178.0, 176.0, 174.0, 172.0, 170.0, 168.0]
+    base = date(2026, 4, 1)
+    n = 70
+    history = {base + timedelta(days=i): week[i % 7] for i in range(n)}
+    predictor.fit(history)
+    assert predictor._fitted  # noqa: SLF001
+    assert predictor.train_metrics is not None
+    assert predictor.train_metrics["model_kind"] == "histgbr"
+    # Fade curve must be populated and carry the cycle shape.
+    assert predictor._fade_curve, "fade curve not populated for histgbr tier"  # noqa: SLF001
+    fade_spread = max(predictor._fade_curve.values()) - min(  # noqa: SLF001
+        predictor._fade_curve.values()
+    )
+    assert fade_spread > 5.0, f"fade curve is flat (spread {fade_spread:.2f})"
+
+    # Training ended at i=69 = cp=6 (trough). The next day (i=70) is cp=0 (peak).
+    anchor_day = base + timedelta(days=n)
+    known = {anchor_day: 180.0}
+    pts = predictor.predict(start=anchor_day, horizon=7, known=known)
+
+    forecast = [p for p in pts if p.source == "forecast"]
+    assert len(forecast) >= 5
+    prices = [p.price_cpl for p in forecast]
+    spread = max(prices) - min(prices)
+    assert spread > 3.0, (
+        f"forecast is flat (spread {spread:.2f} c/L) -- cheapest-day signal lost; prices={prices}"
+    )
+
+    # From a peak anchor the fade is monotone decreasing to the trough, so the
+    # cheapest forecast day is the LAST one (max cycle_pos in the window).
+    cheapest = min(forecast, key=lambda p: p.price_cpl)
+    assert cheapest.day == forecast[-1].day, (
+        f"cheapest forecast day {cheapest.day} is not the trough "
+        f"(expected {forecast[-1].day}); fade shape is wrong; prices={prices}"
+    )
+    # And the trough price is near the historical 168 c/L trough.
+    assert abs(cheapest.price_cpl - 168.0) < 4.0, (
+        f"trough forecast {cheapest.price_cpl} not near historical 168; prices={prices}"
+    )
+
+
 def test_predict_emits_known_days_verbatim() -> None:
     """Multiple known days (within horizon) must be returned exactly."""
     predictor = FuelPricePredictor()

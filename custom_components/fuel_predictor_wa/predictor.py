@@ -237,6 +237,14 @@ class FuelPricePredictor:
         # Cycle state.
         self._hike_days: list[int] = []
         self._L: int = DEFAULT_CYCLE_LEN
+        # Empirical fade curve: mean price per cycle_pos (0..L-1) across all
+        # observed cycles. Drives the per-day forecast SHAPE in
+        # _predict_calibrated (the cheapest-day signal). Empty when fewer than
+        # one hike was detected in training -> predict falls back to the GBM.
+        self._fade_curve: dict[int, float] = {}
+        self._fade_mean: float = 0.0  # mean of fade_curve values (cycle mean)
+        self._last_fit_date: date | None = None
+        self._last_fit_cp: int = 0  # cycle_pos of the last training day
         # Tail context for predict().
         self._prices_tail: list[float] = []
         self._min28: float = 0.0
@@ -280,6 +288,27 @@ class FuelPricePredictor:
         L = median_cycle_len(hikes)
         self._hike_days = hikes
         self._L = L
+
+        # Empirical fade curve (the cheapest-day signal). For each cycle_pos
+        # 0..L-1, the mean price observed at that phase across all full
+        # cycles in the training series. _predict_calibrated anchors to the
+        # live known price and applies (fade[day_cp] - fade[anchor_cp]) to
+        # reconstruct the per-day fade shape that the GBM could not reliably
+        # produce (its `level` feature dominates and the trailing-window
+        # cycle_pos goes out-of-distribution at predict time).
+        self._fade_curve = {}
+        self._fade_mean = self._overall_mean
+        self._last_fit_date = dates[-1] if dates else None
+        self._last_fit_cp = 0
+        if hikes and L > 0:
+            by_cp: dict[int, list[float]] = {}
+            for i, price in enumerate(series):
+                cp = cycle_pos_at(i, hikes) % L
+                by_cp.setdefault(cp, []).append(price)
+            self._fade_curve = {cp: float(np.mean(ps)) for cp, ps in by_cp.items()}
+            if self._fade_curve:
+                self._fade_mean = float(np.mean(list(self._fade_curve.values())))
+            self._last_fit_cp = cycle_pos_at(n - 1, hikes) % L
 
         # Tier 2: weekday_mean (old average-baseline math).
         if n < 14:
@@ -447,8 +476,63 @@ class FuelPricePredictor:
             val = max(0.0, level + seasonal + anchor_shift)
             points.append(DayForecast(day, round(val, 1), "forecast"))
 
-    # ---- internal: offset-calibrated predict ------------------------------
+    # ---- internal: empirical-fade-anchored predict -----------------------
     def _predict_calibrated(
+        self,
+        start: date,
+        horizon: int,
+        known: dict[date, float],
+        known_days: set[date],
+        points: list[DayForecast],
+    ) -> None:
+        """Forecast via the empirical fade curve anchored to the known price.
+
+        Primary path (cheapest-day signal): the per-day forecast SHAPE comes
+        from the historical fade curve (mean price per cycle_pos), and the
+        LEVEL is pinned by the live known anchor price:
+
+            forecast(day) = anchor_price + (fade[day_cp] - fade[anchor_cp])
+
+        The anchor's cycle_pos is derived from the FIT-TIME cycle phase
+        advanced by elapsed days (mod L), NOT by re-detecting hikes on a short
+        trailing window (which went out-of-distribution on real WA data and
+        flattened the forecast -> argmin noise). Falls back to the GBM
+        offset-calibrated path when no fade curve is available (too few hikes
+        in training).
+        """
+        if known:
+            anchor_date = max(known)
+            anchor_price = float(known[anchor_date])
+        else:
+            anchor_date = start - timedelta(days=1)
+            anchor_price = float(self._latest_price) if self._latest_price is not None else 0.0
+
+        L = self._L
+        lo_clamp = CLAMP_LO * self._min28
+        hi_clamp = CLAMP_HI * self._max28
+
+        if self._fade_curve and self._last_fit_date is not None and L > 0:
+            elapsed = max(0, (anchor_date - self._last_fit_date).days)
+            anchor_cp = (self._last_fit_cp + elapsed) % L
+            anchor_fade = self._fade_curve.get(anchor_cp, self._fade_mean)
+            for i in range(horizon):
+                day = start + timedelta(days=i)
+                if day in known_days:
+                    continue
+                # Days from the anchor to this forecast day.
+                day_cp = (self._last_fit_cp + elapsed + (day - anchor_date).days) % L
+                day_fade = self._fade_curve.get(day_cp, self._fade_mean)
+                final = anchor_price + (day_fade - anchor_fade)
+                final = max(lo_clamp, min(hi_clamp, final))
+                points.append(DayForecast(day, round(final, 1), "forecast"))
+            return
+
+        # Fallback: GBM offset-calibrated forecast (no fade curve — e.g. too
+        # few hikes in training). This is the pre-ML6 per-day path.
+        self._predict_calibrated_gbm(start, horizon, known, known_days, points)
+
+    # ---- internal: GBM offset-calibrated predict (fallback) ---------------
+    def _predict_calibrated_gbm(
         self,
         start: date,
         horizon: int,
@@ -635,7 +719,9 @@ class FuelPricePredictor:
         with np.errstate(divide="ignore", invalid="ignore"):
             pct = [err / max(abs(actual), 1e-6) for actual, err in wf_pairs]
         mape_pct = float(np.mean(pct) * 100.0) if pct else None
-        improvement_pct = float((baseline_mae - mae) / baseline_mae) if baseline_mae else None
+        improvement_pct = (
+            float((baseline_mae - mae) / baseline_mae * 100.0) if baseline_mae else None
+        )
         post_hike_mae = float(np.mean(post_hike_errors)) if post_hike_errors else None
         normal_mae = float(np.mean(normal_errors)) if normal_errors else None
         beats = bool(mae < baseline_mae) if baseline_mae is not None else None

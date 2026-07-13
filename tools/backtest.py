@@ -26,7 +26,7 @@ from __future__ import annotations
 import sys
 import time
 import urllib.request
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -78,7 +78,7 @@ def fetch_daily_series() -> tuple[list[date], list[float], int, int]:
         ok += 1
         print(
             f"  [{i:>2}/{len(months)}] {label}: {len(recs):>6} ULP rows  "
-            f"(elapsed {time.time()-t0:.0f}s)"
+            f"(elapsed {time.time() - t0:.0f}s)"
         )
     dates = sorted(per_day.keys())
     series = [float(min(per_day[d])) for d in dates]
@@ -117,9 +117,7 @@ def rolling_origin_backtest(
     # Post-hike threshold using the FULL series (matches walk_forward semantics).
     diffs_all = np.diff(np.asarray(series, dtype=float))
     post_threshold = (
-        max(HIKE_ABS_FLOOR, 1.0 * float(np.std(diffs_all)))
-        if len(diffs_all)
-        else HIKE_ABS_FLOOR
+        max(HIKE_ABS_FLOOR, 1.0 * float(np.std(diffs_all))) if len(diffs_all) else HIKE_ABS_FLOOR
     )
 
     # Horizon-day accumulators: index = horizon day (3..7).
@@ -262,15 +260,17 @@ def main() -> int:
 
     print("\n  in-fit walk-forward train_metrics (full-series fit):")
     print(f"    mae             = {_fmt(tm.get('mae'))} c/L")
-    print(f"    baseline_mae    = {_fmt(tm.get('baseline_mae'))} c/L   (weekday_mean + recent_mean)")
+    print(f"    baseline_mae    = {_fmt(tm.get('baseline_mae'))} c/L  (weekday_mean + recent_mean)")
     print(f"    improvement_pct = {_fmt(tm.get('improvement_pct'))} %")
     print(f"    mape_pct        = {_fmt(tm.get('mape_pct'))} %")
     print(f"    post_hike_mae   = {_fmt(tm.get('post_hike_mae'))} c/L")
     print(f"    normal_mae      = {_fmt(tm.get('normal_mae'))} c/L")
     print(f"    beats_baseline  = {tm.get('beats_baseline')}")
 
-    print(f"\n[3] Rolling-origin backtest (last {ROLLING_WINDOW_DAYS} days, "
-          f"step {ROLLING_STEP_DAYS}d, horizon {HORIZON}d)...")
+    print(
+        f"\n[3] Rolling-origin backtest (last {ROLLING_WINDOW_DAYS} days, "
+        f"step {ROLLING_STEP_DAYS}d, horizon {HORIZON}d)..."
+    )
     rb = rolling_origin_backtest(dates, series)
     if "error" in rb:
         print(f"  FAIL: {rb['error']}")
@@ -288,10 +288,7 @@ def main() -> int:
         nm = rb["new_mae_by_h"].get(k)
         bm = rb["base_mae_by_h"].get(k)
         delta = (nm - bm) if (nm is not None and bm is not None) else None
-        print(
-            f"    {k:>4} {f'+{k-2}d':>8} {_fmt(nm):>8} {_fmt(bm):>8} "
-            f"{_fmt(delta):>8}"
-        )
+        print(f"    {k:>4} {f'+{k - 2}d':>8} {_fmt(nm):>8} {_fmt(bm):>8} {_fmt(delta):>8}")
 
     print("\n  Post-hike vs normal (new model):")
     print(f"    post_hike_mae = {_fmt(rb['new_post_hike_mae'])} c/L  (n={rb['n_post_hike']})")
@@ -311,9 +308,7 @@ def main() -> int:
     print(f"    improvement    = {_fmt(overall_improvement)} %")
 
     hit_rate = (
-        rb["cheapest_hits"] / rb["cheapest_origins"] * 100.0
-        if rb["cheapest_origins"]
-        else None
+        rb["cheapest_hits"] / rb["cheapest_origins"] * 100.0 if rb["cheapest_origins"] else None
     )
     print(
         f"\n  cheapest_day_hit_rate (forecast days 3..7) = "
@@ -321,7 +316,7 @@ def main() -> int:
         f"({rb['cheapest_hits']}/{rb['cheapest_origins']} origins)"
     )
     # Random baseline reference: with 5 forecast days, random = 1/5 = 20%.
-    print(f"  (random reference for 5 forecast days = 20.0 %)")
+    print("  (random reference for 5 forecast days = 20.0 %)")
 
     # ---- Acceptance verdict ----------------------------------------------
     # Gate: post_hike_mae <= 9.5 c/L AND overall MAE < baseline_mae.
