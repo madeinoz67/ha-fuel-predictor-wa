@@ -1,8 +1,9 @@
 """numpy/pandas-free baseline fuel-price forecaster.
 
 Seasonal baseline: per-product weekday mean + recent level. Deliberately
-lightweight (no sklearn/onnx) to keep HA requirements minimal. The fit/predict contract is stable so a
-stronger model can replace the internals later (see tools/train.py).
+lightweight (no sklearn/onnx) to keep HA requirements minimal. The
+fit/predict contract is stable so a stronger model can replace the
+internals later (see tools/train.py).
 """
 
 from __future__ import annotations

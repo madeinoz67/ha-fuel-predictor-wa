@@ -45,10 +45,22 @@ so predictions work from day one — no weeks-long cold-start scrape.
 | `forecast_horizon_days` | 7 | Days 3–7 forecast, 1–2 known |
 | `station_limit` | 5 | How many cheap stations to list today |
 
+## First-run training (automatic)
+
+On first setup the integration downloads ~24 months of FuelWatch history
+(deterministic monthly CSVs from the WA blob store), filters to your fuel type,
+and trains the forecaster in the background. A `Training status` sensor shows
+`untrained → training → ready`. Live today/tomorrow sensors work immediately.
+Call the `fuel_predictor_wa.retrain` service to refresh on demand.
+
 ## Architecture
 
 ```
-data.wa.gov.au (24yr CSV) ──► tools/train.py ──► models/   (offline, seeds forecaster)
+ON-INSTALL (HA background task)         OFFLINE (optional, dev machine)
+ FuelWatch blob store (24 monthly CSVs)   data.wa.gov.au (24yr bulk CSV)
+        │                                           │
+   historic_client ──► trainer ──► models/    tools/train.py ──► models/
+                                          (pre-seed alternative)
 FuelWatch API (today/tmrw) ──► coordinator ──► predictor ──► sensors
                                   ▲
                   history.py (daily append → grows local dataset)
@@ -56,6 +68,8 @@ FuelWatch API (today/tmrw) ──► coordinator ──► predictor ──► s
 
 - **Forecaster**: `numpy` + `pandas` only (no sklearn/onnx).
 - **Client**: vendored async FuelWatch client (`aiohttp`), polled twice daily.
+- **Training status**: `untrained → training → ready` (or `error`). Retraining
+  is triggered by the `fuel_predictor_wa.retrain` service.
 - **`iot_class`**: `cloud_polling`.
 
 ## Development
