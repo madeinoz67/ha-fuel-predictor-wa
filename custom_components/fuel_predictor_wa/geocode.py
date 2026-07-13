@@ -28,6 +28,10 @@ def centroid_lon_lat(bounds: dict[str, Any] | None) -> tuple[float, float] | Non
         return None
     if not ring:
         return None
+    # GeoJSON rings are closed (first == last); drop the duplicate closing
+    # vertex so it isn't double-counted in the average.
+    if len(ring) > 1 and ring[0] == ring[-1]:
+        ring = ring[:-1]
     lons = [p[0] for p in ring]
     lats = [p[1] for p in ring]
     return sum(lons) / len(lons), sum(lats) / len(lats)
