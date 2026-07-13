@@ -41,3 +41,9 @@ build/
 
 # Local Claude settings (keep shared .claude/ tracked)
 .claude/settings.local.json
+
+# Superpowers spec/plan artifacts (local working docs)
+docs/superpowers/
+
+# Local Claude Code project guidance (kept local, not published)
+CLAUDE.md
