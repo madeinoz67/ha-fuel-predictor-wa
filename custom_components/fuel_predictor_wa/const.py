@@ -66,3 +66,38 @@ HISTORY_FILENAME = "fuel_predictor_wa_history.csv"
 
 # FuelWatch reports prices in cents per litre.
 UNIT_CENTS_PER_LITRE = "c/L"
+
+# --- Historical CSV source (Azure Blob; deterministic, not filterable) ---
+HISTORIC_CSV_BASE = "https://warsydprdstafuelwatch.blob.core.windows.net/historical-reports"
+HISTORIC_CSV_TEMPLATE = "FuelWatchRetail-{mm:02d}-{yyyy}.csv"
+
+# Product code -> FuelWatch CSV PRODUCT_DESCRIPTION string.
+# Verified against a real monthly CSV: ULP, PULP, 98 RON, Diesel, LPG, E85.
+PRODUCT_CSV_DESCRIPTION: dict[int, str] = {
+    PRODUCT_UNLEADED: "ULP",
+    PRODUCT_P95: "PULP",
+    PRODUCT_P98: "98 RON",
+    PRODUCT_DIESEL: "Diesel",
+    PRODUCT_LPG: "LPG",
+    PRODUCT_E85: "E85",
+}
+
+# --- On-install training tuning ---
+HISTORY_MONTHS_TARGET = 24
+MIN_MONTHS_TO_TRAIN = 3
+RETRAIN_INTERVAL_DAYS = 30
+TRAIN_RETRY_BACKOFF_HOURS = 1
+TRAIN_RETRY_MAX = 24
+
+# --- Storage (under HA config dir: <config>/fuel_predictor_wa/<entry_id>/) ---
+STORAGE_DIRNAME = "fuel_predictor_wa"
+MODEL_FILENAME = "model.pkl"
+HISTORY_SUBDIR = "history"
+
+# --- Status states (status diagnostic sensor) ---
+STATUS_UNTRAINED = "untrained"
+STATUS_WARMING_UP = "warming_up"
+STATUS_TRAINING = "training"
+STATUS_RETRAINING = "retraining"
+STATUS_READY = "ready"
+STATUS_ERROR = "error"
