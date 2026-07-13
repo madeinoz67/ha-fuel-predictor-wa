@@ -550,6 +550,11 @@ class FuelPricePredictor:
         hold_indices = list(range(n - hold, n, step))
 
         mae_errors: list[float] = []
+        # (actual, abs_err) pairs collected UNDER THE SAME GUARD as mae_errors,
+        # so each error is guaranteed to pair with its own actual. The earlier
+        # MAPE rebuild from a weakly-guarded actuals list silently mispaired
+        # errors with wrong-day actuals whenever a hold day was skipped.
+        wf_pairs: list[tuple[float, float]] = []
         baseline_errors: list[float] = []
         post_hike_errors: list[float] = []
         normal_errors: list[float] = []
@@ -588,7 +593,9 @@ class FuelPricePredictor:
             offset = anchor_price - raw_anchor
             pred_h = max(lo_clamp, min(hi_clamp, raw_h + offset))
             actual_h = series[h]
-            mae_errors.append(abs(actual_h - pred_h))
+            err_h = abs(actual_h - pred_h)
+            mae_errors.append(err_h)
+            wf_pairs.append((actual_h, err_h))
 
             # Average-baseline prediction at h (the OLD predictor's math),
             # trained on the same prefix.
@@ -623,16 +630,10 @@ class FuelPricePredictor:
 
         mae = float(np.mean(mae_errors))
         baseline_mae = float(np.mean(baseline_errors)) if baseline_errors else None
-        # MAPE on non-zero prices.
+        # MAPE on non-zero prices: each error paired with its OWN actual,
+        # collected inside the walk-forward loop under the same guard chain.
         with np.errstate(divide="ignore", invalid="ignore"):
-            pct = [
-                abs(a - p) / max(abs(a), 1e-6)
-                for a, p in zip(
-                    [series[h] for h in hold_indices if h in t_to_row],
-                    mae_errors,
-                    strict=False,
-                )
-            ]
+            pct = [err / max(abs(actual), 1e-6) for actual, err in wf_pairs]
         mape_pct = float(np.mean(pct) * 100.0) if pct else None
         improvement_pct = float((baseline_mae - mae) / baseline_mae) if baseline_mae else None
         post_hike_mae = float(np.mean(post_hike_errors)) if post_hike_errors else None

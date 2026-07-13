@@ -11,11 +11,18 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import numpy as np
+import pytest
+
 from custom_components.fuel_predictor_wa.predictor import (
+    CLAMP_HI,
+    CLAMP_LO,
+    MIN_LEVEL_WINDOW,
     ForecastResult,
     FuelPricePredictor,
     build_row_features,
     detect_hikes,
+    median_cycle_len,
 )
 
 START = date(2026, 7, 13)
@@ -252,3 +259,104 @@ def test_train_metrics_populated() -> None:
     assert m["n_train"] == 70
     assert m["n_hikes"] >= 3
     assert isinstance(m["beats_baseline"], bool)
+
+
+# --- walk-forward MAPE internal consistency ----------------------------------
+
+
+def test_walkforward_mape_pairs_actual_with_own_error() -> None:
+    """The walk-forward MAPE must pair each error with its OWN actual.
+
+    Regression: previously the MAPE list-comprehension zipped a weakly-guarded
+    actuals list (``h in t_to_row``) against the strictly-guarded errors list
+    (full guard chain: h >= MIN_LEVEL_WINDOW+2, anchor in range, train prefix
+    long enough, fit succeeded). When a hold day was skipped, the two lists
+    had different lengths AND different day-identities, so ``zip(...,
+    strict=False)`` silently paired ``error[i]`` with ``actual[j]`` for
+    different days. The formula also treated the error magnitude as if it
+    were a prediction. The result was a silently-wrong ``mape_pct``.
+
+    This test forces a skip (short train prefix on the earliest hold day) and
+    checks internal consistency: ``mape_pct`` == ``mean(err_i / actual_i)``
+    over the PREDICTED hold days only. A stub regressor makes the predictions
+    exactly knowable, so the oracle is fully deterministic.
+    """
+    predictor = FuelPricePredictor()
+    # n = 18 -> hold = min(28, 18//5) = 3, step = 1, hold_indices = [15, 16, 17].
+    # h = 15: anchor_t = 13, train rows (rows_t < 13) = 7..12 = 6 rows
+    #         < MIN_LEVEL_WINDOW (7) -> SKIPPED.
+    # h = 16: anchor_t = 14, train rows = 7..13 = 7 rows -> predicted.
+    # h = 17: anchor_t = 15, train rows = 7..14 = 8 rows -> predicted.
+    # So exactly one hold day is skipped -> the bug would mispair errors.
+    n = 18
+    week = [170.0, 169.0, 168.0, 167.0, 168.0, 169.0, 170.0]
+    series = [week[i % 7] for i in range(n)]
+    base = date(2026, 5, 1)
+    dates = [base + timedelta(days=i) for i in range(n)]
+    # fit() populates the instance state _walk_forward reads (min28/max28/
+    # overall_mean) and selects the ridge_degraded tier for n=18.
+    predictor.fit(dict(zip(dates, series, strict=True)))
+
+    # Rebuild the feature matrix exactly as fit() does.
+    hikes = detect_hikes(series)
+    L = median_cycle_len(hikes)
+    rows_t = list(range(MIN_LEVEL_WINDOW, n))
+    X = np.asarray(
+        [build_row_features(series, t, hikes, L, weekday=dates[t].weekday()) for t in rows_t],
+        dtype=float,
+    )
+    y = np.asarray([series[t] for t in rows_t], dtype=float)
+    feature_cols = [1, 2]  # ridge_degraded tier
+
+    # Stub regressor: predicts a constant. With offset calibration,
+    # pred_h = clamp(PRED + (series[h-2] - PRED)) = clamp(series[h-2]).
+    PRED_VALUE = 169.0
+
+    class _StubReg:
+        def fit(self, X_train, y_train) -> None:  # noqa: ANN001, ARG002
+            pass
+
+        def predict(self, X_rows):  # noqa: ANN001
+            return np.full((len(X_rows),), PRED_VALUE, dtype=float)
+
+    def factory() -> _StubReg:
+        return _StubReg()
+
+    metrics = predictor._walk_forward(  # noqa: SLF001
+        series=series,
+        dates=dates,
+        rows_t=rows_t,
+        X=X,
+        y=y,
+        feature_cols=feature_cols,
+        factory=factory,
+        hold=3,
+        hikes=hikes,
+    )
+
+    # The walk-forward ran and at least one day was predicted.
+    assert metrics["n_holdout"] >= 1, "expected at least one predicted hold day"
+    assert metrics["mape_pct"] is not None
+
+    # Oracle: walk the SAME guards and compute (actual, abs_err) for each
+    # PREDICTED hold day, then MAPE = mean(err / max(|actual|, 1e-6)) * 100.
+    t_to_row = {t: i for i, t in enumerate(rows_t)}
+    hold_indices = list(range(n - 3, n))
+    lo_clamp = CLAMP_LO * min(series)
+    hi_clamp = CLAMP_HI * max(series)
+    pairs: list[tuple[float, float]] = []
+    for h in hold_indices:
+        if h < MIN_LEVEL_WINDOW + 2 or (h - 2) not in t_to_row or h not in t_to_row:
+            continue
+        anchor_t = h - 2
+        train_idx = [i for i, t in enumerate(rows_t) if t < anchor_t]
+        if len(train_idx) < MIN_LEVEL_WINDOW:
+            continue
+        actual = series[h]
+        pred = max(lo_clamp, min(hi_clamp, float(series[anchor_t])))
+        pairs.append((actual, abs(actual - pred)))
+
+    # Sanity: the skip really happened (fewer pairs than hold days).
+    assert len(pairs) < len(hold_indices), "test setup did not force a skip"
+    expected_mape = sum(err / max(abs(a), 1e-6) for a, err in pairs) / len(pairs) * 100.0
+    assert metrics["mape_pct"] == pytest.approx(expected_mape, rel=1e-9)
