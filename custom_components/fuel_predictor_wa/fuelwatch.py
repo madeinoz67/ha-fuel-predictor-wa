@@ -69,6 +69,8 @@ class FuelWatchClient:
 
         Robust to both the SOAP-style ``<site>`` and RSS ``<item>`` shapes.
         """
+        # FuelWatch RSS is served with a UTF-8 BOM; strip it or ET.fromstring fails.
+        xml_text = xml_text.lstrip("﻿")
         root = ET.fromstring(xml_text)
         sites = list(root.iter("site")) or list(root.iter("item"))
         parsed: list[dict[str, Any]] = []

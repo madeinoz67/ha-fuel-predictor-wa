@@ -15,7 +15,7 @@ DOMAIN_TITLE = "Fuel Predictor WA"
 # --- Live FuelWatch endpoint (today/tomorrow only) ------------------------
 # Public XML service. Exact path to confirm during implementation; the service
 # exposes the same data as the RSS feed at https://www.fuelwatch.wa.gov.au/tools/rss
-FUELWATCH_ENDPOINT = "https://www.fuelwatch.wa.gov.au/retail/fuel/fuelwatch"
+FUELWATCH_ENDPOINT = "https://www.fuelwatch.wa.gov.au/fuelwatch/fuelWatchRSS"
 FUELWATCH_DAY_TODAY = "today"
 FUELWATCH_DAY_TOMORROW = "tomorrow"
 
