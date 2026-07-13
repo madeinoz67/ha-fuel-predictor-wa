@@ -59,16 +59,19 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         self.predictor = FuelPricePredictor()
         self.status: str = STATUS_UNTRAINED
         self._train_in_progress = False
-
-        self._maybe_load_model()
+        # Model loading is deferred to async_load_model() so the (blocking) file
+        # read runs in the executor, never on the event loop.
 
     # --- storage + model -------------------------------------------------
     def _storage_dir(self) -> Path:
         uid = self.entry.unique_id or self.entry.entry_id
         return Path(self.hass.config.path(STORAGE_DIRNAME, uid))
 
-    def _maybe_load_model(self) -> None:
-        loaded = load_model(self._storage_dir() / MODEL_FILENAME)
+    async def async_load_model(self) -> None:
+        """Load the trained model artifact (if any), off the event loop."""
+        loaded = await self.hass.async_add_executor_job(
+            load_model, self._storage_dir() / MODEL_FILENAME
+        )
         if loaded is not None:
             self.predictor = loaded
             self.status = STATUS_READY
@@ -92,7 +95,7 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         self.async_update_listeners()
         try:
             predictor = await assemble_and_train(self._build_fetch_month(), date.today())
-            save_model(predictor, self._storage_dir())
+            await self.hass.async_add_executor_job(save_model, predictor, self._storage_dir())
             self.predictor = predictor
             self.status = STATUS_READY
             await self.async_request_refresh()
