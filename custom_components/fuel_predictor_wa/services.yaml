@@ -1,0 +1,4 @@
+# Fuel Predictor WA — services.
+# The `retrain` service is registered dynamically in __init__.py. This file is
+# intentionally empty so Home Assistant does not log a services.yaml load error
+# for the integration.

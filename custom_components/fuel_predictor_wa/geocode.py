@@ -7,6 +7,7 @@ to HA's configured location. No external geocoder.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -56,7 +57,13 @@ def nearest_suburb(suburbs: list[dict[str, Any]], lat: float, lon: float) -> str
 
 
 async def async_detect_suburb(hass: HomeAssistant) -> str | None:
-    """Detect the nearest FuelWatch suburb to HA's configured location."""
+    """Detect the nearest FuelWatch suburb to HA's configured location.
+
+    Best-effort: any failure (no location, network, slow API, bad payload)
+    returns None so the config flow always renders. A hard 5 s guard prevents a
+    slow/unreachable FuelWatch API from hanging the flow (which HA surfaces to
+    the user as a 500).
+    """
     lat = hass.config.latitude
     lon = hass.config.longitude
     if lat is None or lon is None:
@@ -64,10 +71,11 @@ async def async_detect_suburb(hass: HomeAssistant) -> str | None:
         return None
     session = async_get_clientsession(hass)
     try:
-        async with session.get(FUELWATCH_SUBURBS_ENDPOINT, timeout=30) as resp:
-            resp.raise_for_status()
-            suburbs = await resp.json()
-    except Exception as err:  # noqa: BLE001 — detection is best-effort
-        _LOGGER.warning("Could not fetch FuelWatch suburbs list: %s", err)
+        async with asyncio.timeout(5):
+            async with session.get(FUELWATCH_SUBURBS_ENDPOINT) as resp:
+                resp.raise_for_status()
+                suburbs = await resp.json()
+            return nearest_suburb(suburbs, lat, lon)
+    except Exception as err:  # noqa: BLE001 — best-effort; never break the config flow
+        _LOGGER.debug("Could not auto-detect suburb: %s", err)
         return None
-    return nearest_suburb(suburbs, lat, lon)
