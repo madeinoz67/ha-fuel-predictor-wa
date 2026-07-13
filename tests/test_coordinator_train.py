@@ -72,6 +72,54 @@ async def test_first_refresh_trains_and_marks_ready(hass, tmp_path, monkeypatch)
     await coord.async_shutdown()
 
 
+@pytest.mark.asyncio
+async def test_predict_runs_in_executor(hass, tmp_path, monkeypatch) -> None:
+    """predict() must run off the event loop via async_add_executor_job."""
+    hass.config.config_dir = str(tmp_path)
+    monkeypatch.setattr(
+        "custom_components.fuel_predictor_wa.fuelwatch.async_get_clientsession",
+        lambda _hass: None,
+    )
+
+    class _Entry:
+        entry_id = "test-entry-exec"
+        unique_id = "fuel_predictor_wa_exec"
+        data = _entry_data()
+
+    coord = FuelPredictorDataUpdateCoordinator(hass, _Entry())
+    coord.client = _StubClient()
+
+    async def _fake_fetch(year, month):
+        return [
+            {
+                "date": date(year, month, 1),
+                "price": 180.0,
+                "product": "ULP",
+                "suburb": "BUNBURY",
+                "region": "South West",
+            }
+        ]
+
+    monkeypatch.setattr(coord, "_build_fetch_month", lambda: _fake_fetch)
+
+    # Wrap async_add_executor_job so we can observe what got offloaded.
+    real_executor = hass.async_add_executor_job
+    executor_calls: list = []
+
+    async def _tracking_executor(func, *args, **kwargs):
+        executor_calls.append(getattr(func, "__name__", repr(func)))
+        return await real_executor(func, *args, **kwargs)
+
+    monkeypatch.setattr(hass, "async_add_executor_job", _tracking_executor)
+
+    await coord.async_refresh()
+    await hass.async_block_till_done()
+
+    # predict() ran through the executor during the refresh.
+    assert "predict" in executor_calls, f"predict not offloaded; saw {executor_calls}"
+    await coord.async_shutdown()
+
+
 class _StubClient:
     """Replaces FuelWatchClient so no live HTTP happens during the test."""
 

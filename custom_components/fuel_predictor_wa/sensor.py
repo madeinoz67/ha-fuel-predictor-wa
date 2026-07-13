@@ -30,6 +30,7 @@ async def async_setup_entry(
             CheapestDaySensor(coordinator, entry),
             CheapestStationTodaySensor(coordinator, entry),
             StatusSensor(coordinator, entry),
+            ModelFitSensor(coordinator, entry),
         ]
     )
 
@@ -127,3 +128,39 @@ class StatusSensor(_FuelPredictorEntity):
     @property
     def native_value(self) -> str | None:
         return self.coordinator.status
+
+
+class ModelFitSensor(_FuelPredictorEntity):
+    """Holdout goodness-of-fit metrics for the fitted predictor.
+
+    State is the holdout MAE in c/L (rounded to 2 dp) — the same unit as the
+    forecast sensors, so the deviation is directly comparable to a predicted
+    price. ``unknown`` pre-training or on the bottom tiers where no honest
+    holdout is computable. Attributes expose the rest of ``train_metrics``,
+    dropping any key whose value is None (low-tier models have several).
+    """
+
+    _attr_key = "model_fit"
+    _attr_name = "Model fit"
+    _attr_native_unit_of_measurement = UNIT_CENTS_PER_LITRE
+    _attr_icon = "mdi:chart-line"
+
+    @property
+    def native_value(self) -> float | None:
+        metrics = self._metrics
+        mae = metrics.get("mae")
+        if mae is None:
+            return None
+        return round(float(mae), 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        metrics = self._metrics
+        # mae is the native value; don't duplicate it in attrs.
+        return {k: v for k, v in metrics.items() if k != "mae" and v is not None}
+
+    @property
+    def _metrics(self) -> dict[str, Any]:
+        """Read train_metrics defensively — may be absent pre-fit / on stubs."""
+        predictor = getattr(self.coordinator, "predictor", None)
+        return getattr(predictor, "train_metrics", None) or {}

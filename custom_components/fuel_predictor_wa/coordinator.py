@@ -94,7 +94,11 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         self.status = STATUS_TRAINING
         self.async_update_listeners()
         try:
-            predictor = await assemble_and_train(self._build_fetch_month(), date.today())
+            predictor = await assemble_and_train(
+                self._build_fetch_month(),
+                date.today(),
+                executor=self.hass.async_add_executor_job,
+            )
             await self.hass.async_add_executor_job(save_model, predictor, self._storage_dir())
             self.predictor = predictor
             self.status = STATUS_READY
@@ -136,7 +140,10 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         if not self.predictor._fitted and not self._train_in_progress:  # noqa: SLF001
             self.hass.async_create_task(self._async_train_background())
 
-        points = self.predictor.predict(today_date, self.horizon, known)
+        # sklearn predict is CPU-bound -> run it off the event loop.
+        points = await self.hass.async_add_executor_job(
+            self.predictor.predict, today_date, self.horizon, known
+        )
         forecast = ForecastResult(points=points, cheapest_day=FuelPricePredictor.cheapest(points))
         stations_sorted = sorted(today, key=lambda s: s.get("price", float("inf")))[
             : self.station_limit

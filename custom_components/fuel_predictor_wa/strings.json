@@ -42,6 +42,9 @@
       },
       "cheapest_station_today": {
         "name": "Cheapest station today"
+      },
+      "model_fit": {
+        "name": "Model fit"
       }
     }
   }
