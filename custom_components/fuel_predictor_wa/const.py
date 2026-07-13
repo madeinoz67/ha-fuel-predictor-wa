@@ -95,6 +95,14 @@ STORAGE_DIRNAME = "fuel_predictor_wa"
 MODEL_FILENAME = "model.pkl"
 HISTORY_SUBDIR = "history"
 
+# --- Global leading-indicator prices (Yahoo Finance chart API) ---
+# RBOB gasoline (~$/gallon), Brent crude (~$/barrel), AUD/USD FX.
+# Global prices lead WA retail by ~1-2 weeks (pass-through), so they feed the
+# predictor's global-feature layer at a lag.
+YAHOO_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
+YAHOO_SYMBOLS = ("RB=F", "BZ=F", "AUDUSD=X")  # RBOB gasoline, Brent crude, AUD/USD
+GLOBAL_FEATURE_LAG_DAYS = 7  # global prices lead retail by ~1-2 weeks (pass-through)
+
 # --- Status states (status diagnostic sensor) ---
 STATUS_UNTRAINED = "untrained"
 STATUS_TRAINING = "training"
