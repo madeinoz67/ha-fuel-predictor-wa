@@ -32,7 +32,14 @@ def test_save_then_load_roundtrips(monkeypatch, tmp_path) -> None:
 
     loaded = load_model(artifact)
     assert loaded is not None
-    assert loaded._overall_mean == predictor._overall_mean  # noqa: SLF001
+    # The average-baseline predictor exposed _overall_mean; the cycle-aware
+    # HGBR model does not. Assert the round-trip via the still-stable public
+    # contract: the loaded predictor is fitted and reports the same model_kind.
+    assert loaded._fitted  # noqa: SLF001
+    assert (
+        loaded.train_metrics is not None
+        and loaded.train_metrics["model_kind"] == predictor.train_metrics["model_kind"]
+    )
 
 
 async def _fake_fetch_all_ulp(year: int, month: int):
