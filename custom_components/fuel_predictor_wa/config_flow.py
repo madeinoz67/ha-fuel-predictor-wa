@@ -23,23 +23,7 @@ from .const import (
     DOMAIN,
     PRODUCTS,
 )
-
-STEP_USER_DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_PRODUCT, default=DEFAULT_PRODUCT): vol.In(PRODUCTS),
-        vol.Required(CONF_SUBURB): str,
-        vol.Optional(CONF_SURROUNDING, default=DEFAULT_SURROUNDING): bool,
-        vol.Optional(CONF_RADIUS_KM, default=DEFAULT_RADIUS_KM): vol.All(
-            vol.Coerce(int), vol.Range(min=1, max=100)
-        ),
-        vol.Optional(CONF_FORECAST_HORIZON_DAYS, default=DEFAULT_FORECAST_HORIZON_DAYS): vol.All(
-            vol.Coerce(int), vol.Range(min=2, max=14)
-        ),
-        vol.Optional(CONF_STATION_LIMIT, default=DEFAULT_STATION_LIMIT): vol.All(
-            vol.Coerce(int), vol.Range(min=1, max=20)
-        ),
-    }
-)
+from .geocode import async_detect_suburb
 
 
 class FuelPredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -50,7 +34,11 @@ class FuelPredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Handle the initial step."""
+        """Handle the initial step.
+
+        The suburb field defaults to the FuelWatch suburb nearest HA's
+        configured location (auto-detected); the user can override it.
+        """
         errors: dict[str, str] = {}
         if user_input is not None:
             await self.async_set_unique_id(
@@ -61,9 +49,24 @@ class FuelPredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 title=f"{PRODUCTS[user_input[CONF_PRODUCT]]} — {user_input[CONF_SUBURB]}",
                 data=user_input,
             )
-        return self.async_show_form(
-            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
+        detected = await async_detect_suburb(self.hass)
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_PRODUCT, default=DEFAULT_PRODUCT): vol.In(PRODUCTS),
+                vol.Required(CONF_SUBURB, default=detected or ""): str,
+                vol.Optional(CONF_SURROUNDING, default=DEFAULT_SURROUNDING): bool,
+                vol.Optional(CONF_RADIUS_KM, default=DEFAULT_RADIUS_KM): vol.All(
+                    vol.Coerce(int), vol.Range(min=1, max=100)
+                ),
+                vol.Optional(
+                    CONF_FORECAST_HORIZON_DAYS, default=DEFAULT_FORECAST_HORIZON_DAYS
+                ): vol.All(vol.Coerce(int), vol.Range(min=2, max=14)),
+                vol.Optional(CONF_STATION_LIMIT, default=DEFAULT_STATION_LIMIT): vol.All(
+                    vol.Coerce(int), vol.Range(min=1, max=20)
+                ),
+            }
         )
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
     @staticmethod
     @callback

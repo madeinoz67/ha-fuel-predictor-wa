@@ -10,7 +10,7 @@ from custom_components.fuel_predictor_wa.fuelwatch import FuelWatchClient
 
 # Real-shape FuelWatch RSS feed: leading UTF-8 BOM + one abridged <item>.
 RSS = (
-    "﻿<rss version=\"2.0\"><channel><title>FuelWatch Prices For Bunbury</title>"
+    '﻿<rss version="2.0"><channel><title>FuelWatch Prices For Bunbury</title>'
     "<item>"
     "<title>161.3: Vibe Bunbury South</title>"
     "<brand>Vibe</brand><date>2026-07-13</date><price>161.3</price>"
@@ -38,9 +38,5 @@ def test_parse_empty_feed_returns_empty() -> None:
 
 
 def test_parse_skips_item_without_price() -> None:
-    feed = (
-        "﻿<rss><channel>"
-        "<item><brand>Vibe</brand><location>X</location></item>"
-        "</channel></rss>"
-    )
+    feed = "﻿<rss><channel><item><brand>Vibe</brand><location>X</location></item></channel></rss>"
     assert FuelWatchClient.parse(feed) == []
