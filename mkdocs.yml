@@ -1,0 +1,24 @@
+site_name: Fuel Predictor WA
+site_description: Home Assistant integration — ML fuel-price predictor for Western Australia (FuelWatch)
+repo_url: https://github.com/madeinoz67/ha-fuel-predictor-wa
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - tables

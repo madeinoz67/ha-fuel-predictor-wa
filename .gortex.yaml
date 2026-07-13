@@ -1,0 +1,12 @@
+# Gortex code-graph config for ha-fuel-predictor-wa
+# Tracked by the machine-level daemon: `gortex track .` (already run at scaffold).
+# Per-repo config lives here; the index is held by the daemon, keyed by repo.
+
+project:
+  name: ha-fuel-predictor-wa
+  description: Home Assistant ML fuel-price predictor for Western Australia (FuelWatch)
+
+# Python is auto-detected. List explicit roots if you add non-standard paths.
+# roots:
+#   - custom_components/fuel_predictor_wa
+#   - tools

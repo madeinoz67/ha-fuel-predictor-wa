@@ -1,0 +1,30 @@
+[project]
+name = "ha-fuel-predictor-wa"
+version = "0.1.0"
+description = "Home Assistant integration: ML fuel-price predictor for Western Australia (FuelWatch)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "Stephen Eaton" }]
+urls.Source = "https://github.com/madeinoz67/ha-fuel-predictor-wa"
+urls.Issues = "https://github.com/madeinoz67/ha-fuel-predictor-wa/issues"
+
+dependencies = ["numpy>=1.24.0", "pandas>=2.0.0"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

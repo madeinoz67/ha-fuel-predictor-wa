@@ -1,0 +1,12 @@
+{
+  "domain": "fuel_predictor_wa",
+  "name": "Fuel Predictor WA",
+  "codeowners": ["@madeinoz67"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/madeinoz67/ha-fuel-predictor-wa",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/madeinoz67/ha-fuel-predictor-wa/issues",
+  "requirements": ["numpy>=1.24.0", "pandas>=2.0.0"],
+  "version": "0.1.0"
+}

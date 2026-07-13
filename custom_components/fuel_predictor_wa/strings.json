@@ -1,0 +1,48 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Fuel Predictor WA",
+        "description": "Predict the cheapest day to buy fuel in Western Australia using FuelWatch.",
+        "data": {
+          "product": "Fuel type",
+          "suburb": "Suburb",
+          "surrounding": "Include surrounding suburbs",
+          "radius_km": "Search radius (km)",
+          "forecast_horizon_days": "Forecast horizon (days)",
+          "station_limit": "Stations to list today"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to reach FuelWatch."
+    },
+    "abort": {
+      "already_configured": "This fuel type + suburb is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Fuel Predictor WA — options",
+        "data": {
+          "product": "Fuel type",
+          "suburb": "Suburb",
+          "surrounding": "Include surrounding suburbs",
+          "radius_km": "Search radius (km)",
+          "forecast_horizon_days": "Forecast horizon (days)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "cheapest_day": {
+        "name": "Cheapest day"
+      },
+      "cheapest_station_today": {
+        "name": "Cheapest station today"
+      }
+    }
+  }
+}

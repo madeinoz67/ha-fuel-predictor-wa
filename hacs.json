@@ -1,0 +1,6 @@
+{
+  "name": "Fuel Predictor WA",
+  "render_readme": true,
+  "homeassistant": "2024.1.0",
+  "country": ["AU"]
+}
