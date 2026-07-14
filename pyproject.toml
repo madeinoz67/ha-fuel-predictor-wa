@@ -14,6 +14,7 @@ dependencies = ["numpy>=1.24.0", "pandas>=2.0.0"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+extend-exclude = ["tools/accuracy_spike_local_vs_wa.py"]  # throwaway analysis spike
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4"]

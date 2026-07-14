@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
@@ -11,18 +11,28 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import forecast_ledger
+from .catchment import (
+    async_fetch_suburbs,
+    is_cache_fresh,
+    load_cached_catchment,
+    resolve_catchment,
+    save_cached_catchment,
+)
 from .const import (
     CONF_FORECAST_HORIZON_DAYS,
+    CONF_MIN_STATIONS,
     CONF_PRODUCT,
     CONF_STATION_LIMIT,
     CONF_SUBURB,
     CONF_SURROUNDING,
     DEFAULT_FORECAST_HORIZON_DAYS,
+    DEFAULT_MIN_STATIONS,
     DEFAULT_STATION_LIMIT,
     DEFAULT_SURROUNDING,
     DOMAIN,
     MODEL_FILENAME,
     PRODUCT_CSV_DESCRIPTION,
+    RETRAIN_INTERVAL_HOURS,
     STATUS_ERROR,
     STATUS_READY,
     STATUS_TRAINING,
@@ -31,7 +41,7 @@ from .const import (
     UPDATE_INTERVAL_MINUTES,
 )
 from .fuelwatch import FuelWatchClient
-from .historic_client import HistoricClient
+from .historic_client import async_fetch_month_cached
 from .predictor import ForecastResult, FuelPricePredictor
 from .trainer import assemble_and_train, load_model, save_model
 
@@ -68,11 +78,15 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         self.surrounding: bool = cfg.get(CONF_SURROUNDING, DEFAULT_SURROUNDING)
         self.horizon: int = cfg.get(CONF_FORECAST_HORIZON_DAYS, DEFAULT_FORECAST_HORIZON_DAYS)
         self.station_limit: int = cfg.get(CONF_STATION_LIMIT, DEFAULT_STATION_LIMIT)
+        self.min_stations: int = cfg.get(CONF_MIN_STATIONS, DEFAULT_MIN_STATIONS)
 
         self.client = FuelWatchClient(hass)
         self.predictor = FuelPricePredictor()
         self.status: str = STATUS_UNTRAINED
         self._train_in_progress = False
+        # Resolved local catchment ( suburb set + metadata ) or None for WA-wide.
+        # Lazy-resolved on first train; cached on disk keyed by config.
+        self.catchment: dict | None = None
         # Model loading is deferred to async_load_model() so the (blocking) file
         # read runs in the executor, never on the event loop.
 
@@ -90,14 +104,56 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
             self.predictor = loaded
             self.status = STATUS_READY
 
+    # --- catchment + refit cadence --------------------------------------
+    async def _async_resolve_catchment(self) -> dict | None:
+        """Resolve + cache the local catchment; None falls back to WA-wide."""
+        cached = await self.hass.async_add_executor_job(load_cached_catchment, self._storage_dir())
+        if is_cache_fresh(cached, self.product, self.suburb, self.min_stations):
+            self.catchment = cached
+            return cached
+        suburbs = await async_fetch_suburbs(self.hass)
+        resolved = (
+            resolve_catchment(suburbs or [], self.suburb, self.min_stations) if suburbs else None
+        )
+        await self.hass.async_add_executor_job(save_cached_catchment, self._storage_dir(), resolved)
+        if resolved is not None:
+            _LOGGER.info(
+                "local catchment for %s: %d suburbs, %d stations",
+                resolved["anchor"],
+                len(resolved["suburbs"]),
+                resolved["total_stations"],
+            )
+        else:
+            _LOGGER.info("catchment unresolved for '%s'; training WA-wide", self.suburb)
+        self.catchment = resolved
+        return resolved
+
+    def _should_refit(self) -> bool:
+        """True if the fitted model is older than the refit interval and idle."""
+        if self._train_in_progress:
+            return False
+        metrics = getattr(self.predictor, "train_metrics", None) or {}
+        trained_at = metrics.get("trained_at")
+        if not trained_at:
+            return False
+        try:
+            last = datetime.fromisoformat(trained_at)
+        except ValueError:
+            return False
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        return datetime.now(UTC) - last >= timedelta(hours=RETRAIN_INTERVAL_HOURS)
+
     # --- training seam (overridden in tests) -----------------------------
     def _build_fetch_month(self):
-        """Return an async fetch_month(year, month) bound to the live blob client."""
-        historic = HistoricClient(self.hass)
+        """Cached bulk fetcher: immutable months load from disk; the current +
+        previous month re-download (they still gain days). Catchment-agnostic —
+        the suburb filter is applied at series collapse."""
         description = PRODUCT_CSV_DESCRIPTION[self.product]
+        storage_dir = self._storage_dir()
 
         async def _fetch(year: int, month: int):
-            return await historic.async_fetch_month(year, month, description)
+            return await async_fetch_month_cached(self.hass, storage_dir, year, month, description)
 
         return _fetch
 
@@ -108,10 +164,13 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         self.status = STATUS_TRAINING
         self.async_update_listeners()
         try:
+            await self._async_resolve_catchment()
+            suburbs_filter = set(self.catchment["suburbs"]) if self.catchment else None
             predictor = await assemble_and_train(
                 self._build_fetch_month(),
                 date.today(),
                 executor=self.hass.async_add_executor_job,
+                suburbs_filter=suburbs_filter,
             )
             await self.hass.async_add_executor_job(save_model, predictor, self._storage_dir())
             self.predictor = predictor
@@ -150,9 +209,12 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
             if tmr:
                 known[today_date + timedelta(days=1)] = min(tmr)
 
-        # Launch background training if we have no usable model yet.
+        # Launch background training if we have no usable model yet, else refit
+        # on the configured cadence (catchment-aware) after a successful poll.
         if not self.predictor._fitted and not self._train_in_progress:  # noqa: SLF001
             self.hass.async_create_task(self._async_train_background())
+        elif self._should_refit():
+            self.hass.async_create_task(self._async_train_background(retrain=True))
 
         # predict is CPU-bound (pure numpy) -> run it off the event loop.
         points = await self.hass.async_add_executor_job(

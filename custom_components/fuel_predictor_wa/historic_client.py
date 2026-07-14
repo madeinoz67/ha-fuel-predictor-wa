@@ -10,12 +10,13 @@ import csv
 import logging
 from datetime import date
 from io import StringIO
+from pathlib import Path
 from typing import Any
 
 import aiohttp
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import HISTORIC_CSV_BASE, HISTORIC_CSV_TEMPLATE
+from .const import BULK_CACHE_DIRNAME, HISTORIC_CSV_BASE, HISTORIC_CSV_TEMPLATE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,3 +94,48 @@ class HistoricClient:
             resp.raise_for_status()
             text = await resp.text()
         return await self._hass.async_add_executor_job(parse_csv, text, product_description)
+
+
+def _mutable_months(today: date) -> set[tuple[int, int]]:
+    """The current and previous month — files that may still gain new days."""
+    cur = (today.year, today.month)
+    pm, py = today.month - 1, today.year
+    if pm == 0:
+        pm, py = 12, py - 1
+    return {cur, (py, pm)}
+
+
+async def async_fetch_month_cached(
+    hass: Any,
+    storage_dir: Path,
+    year: int,
+    month: int,
+    product_description: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch a month with on-disk caching: immutable months load from cache,
+    the current + previous month re-download (they still gain days).
+
+    Caches the raw CSV text (catchment-agnostic — the suburb filter is applied
+    later at series collapse, so a catchment change reuses the cached months).
+    """
+    cache_dir = Path(storage_dir) / BULK_CACHE_DIRNAME
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / f"{year}-{month:02d}.csv"
+    mutable = (year, month) in _mutable_months(date.today())
+
+    def _read() -> str:
+        return cached.read_text()
+
+    def _write(text: str) -> None:
+        cached.write_text(text)
+
+    if cached.exists() and not mutable:
+        text = await hass.async_add_executor_job(_read)
+    else:
+        session = async_get_clientsession(hass)
+        url = month_url(year, month)
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+            resp.raise_for_status()
+            text = await resp.text()
+        await hass.async_add_executor_job(_write, text)
+    return await hass.async_add_executor_job(parse_csv, text, product_description)

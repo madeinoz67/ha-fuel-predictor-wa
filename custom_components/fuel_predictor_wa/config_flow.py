@@ -10,17 +10,21 @@ from homeassistant.core import callback
 
 from .const import (
     CONF_FORECAST_HORIZON_DAYS,
+    CONF_MIN_STATIONS,
     CONF_PRODUCT,
     CONF_RADIUS_KM,
     CONF_STATION_LIMIT,
     CONF_SUBURB,
     CONF_SURROUNDING,
     DEFAULT_FORECAST_HORIZON_DAYS,
+    DEFAULT_MIN_STATIONS,
     DEFAULT_PRODUCT,
     DEFAULT_RADIUS_KM,
     DEFAULT_STATION_LIMIT,
     DEFAULT_SURROUNDING,
     DOMAIN,
+    MAX_MIN_STATIONS,
+    MIN_MIN_STATIONS,
     PRODUCTS,
 )
 from .geocode import async_detect_suburb
@@ -63,6 +67,9 @@ class FuelPredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ): vol.All(vol.Coerce(int), vol.Range(min=2, max=14)),
                 vol.Optional(CONF_STATION_LIMIT, default=DEFAULT_STATION_LIMIT): vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=20)
+                ),
+                vol.Optional(CONF_MIN_STATIONS, default=DEFAULT_MIN_STATIONS): vol.All(
+                    vol.Coerce(int), vol.Range(min=MIN_MIN_STATIONS, max=MAX_MIN_STATIONS)
                 ),
             }
         )
@@ -111,6 +118,10 @@ class FuelPredictorOptionsFlow(config_entries.OptionsFlow):
                     CONF_FORECAST_HORIZON_DAYS,
                     default=data.get(CONF_FORECAST_HORIZON_DAYS, DEFAULT_FORECAST_HORIZON_DAYS),
                 ): vol.All(vol.Coerce(int), vol.Range(min=2, max=14)),
+                vol.Optional(
+                    CONF_MIN_STATIONS,
+                    default=data.get(CONF_MIN_STATIONS, DEFAULT_MIN_STATIONS),
+                ): vol.All(vol.Coerce(int), vol.Range(min=MIN_MIN_STATIONS, max=MAX_MIN_STATIONS)),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

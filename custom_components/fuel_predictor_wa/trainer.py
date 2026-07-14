@@ -36,10 +36,19 @@ async def _default_executor(fn: Callable[..., Any], *args: Any) -> Any:
     return fn(*args)
 
 
-def series_from_records(records: list[dict[str, Any]]) -> dict[date, float]:
-    """Collapse records to {date: min_price_for_day}."""
+def series_from_records(
+    records: list[dict[str, Any]], suburbs_filter: set[str] | None = None
+) -> dict[date, float]:
+    """Collapse records to {date: min_price_for_day}, optionally catchment-filtered.
+
+    ``suburbs_filter`` (upper-cased suburb names) restricts to a local catchment;
+    None keeps all records (the original WA-wide behaviour).
+    """
     series: dict[date, float] = {}
+    norm_filter = {s.upper() for s in suburbs_filter} if suburbs_filter else None
     for r in records:
+        if norm_filter is not None and str(r.get("suburb", "")).upper() not in norm_filter:
+            continue
         d, p = r["date"], r["price"]
         if d not in series or p < series[d]:
             series[d] = p
@@ -96,6 +105,7 @@ async def assemble_and_train(
     today: date,
     months: int = HISTORY_MONTHS_TARGET,
     executor: Executor | None = None,
+    suburbs_filter: set[str] | None = None,
 ) -> FuelPricePredictor:
     """Fetch `months` months via `fetch_month`, fit, and return the predictor.
 
@@ -120,4 +130,4 @@ async def assemble_and_train(
             records.extend(month_records)
     if fetched < MIN_MONTHS_TO_TRAIN:
         raise RuntimeError(f"training needs >= {MIN_MONTHS_TO_TRAIN} months, got {fetched}")
-    return await run(fit_predictor, series_from_records(records))
+    return await run(fit_predictor, series_from_records(records, suburbs_filter))

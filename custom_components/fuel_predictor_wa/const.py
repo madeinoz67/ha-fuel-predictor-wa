@@ -51,6 +51,7 @@ CONF_SURROUNDING = "surrounding"
 CONF_RADIUS_KM = "radius_km"
 CONF_FORECAST_HORIZON_DAYS = "forecast_horizon_days"
 CONF_STATION_LIMIT = "station_limit"
+CONF_MIN_STATIONS = "min_stations"  # local catchment gate: expand to >= this many stations
 
 # --- Defaults -------------------------------------------------------------
 DEFAULT_PRODUCT = PRODUCT_UNLEADED
@@ -58,6 +59,9 @@ DEFAULT_SURROUNDING = True
 DEFAULT_RADIUS_KM = 10
 DEFAULT_FORECAST_HORIZON_DAYS = 7
 DEFAULT_STATION_LIMIT = 5
+DEFAULT_MIN_STATIONS = 40  # catchment gate: ~regional sweet spot (accuracy spike)
+MIN_MIN_STATIONS = 5
+MAX_MIN_STATIONS = 200
 
 # FuelWatch publishes tomorrow's price after ~14:30 AWST; refresh twice daily.
 UPDATE_INTERVAL_MINUTES = 720
@@ -89,11 +93,14 @@ HISTORY_MONTHS_TARGET = 24
 MIN_MONTHS_TO_TRAIN = 3
 MIN_MONTHS_FULL_MODEL = 6  # gates the full HGBR path (~3 cycles min for stable cycle detection)
 RETRAIN_INTERVAL_DAYS = 30
+RETRAIN_INTERVAL_HOURS = 24  # periodic background refit cadence (after a successful poll)
 
 # --- Storage (under HA config dir: <config>/fuel_predictor_wa/<entry_id>/) ---
 STORAGE_DIRNAME = "fuel_predictor_wa"
 MODEL_FILENAME = "model.pkl"
 HISTORY_SUBDIR = "history"
+BULK_CACHE_DIRNAME = "bulk_cache"  # cached monthly historical CSVs (immutable months)
+CATCHMENT_FILENAME = "catchment.json"  # resolved local catchment (suburb set + meta)
 
 # --- Global leading-indicator prices (Yahoo Finance chart API) ---
 # RBOB gasoline (~$/gallon), Brent crude (~$/barrel), AUD/USD FX.
