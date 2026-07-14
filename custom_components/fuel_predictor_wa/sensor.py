@@ -33,6 +33,7 @@ async def async_setup_entry(
         CheapestStationTodaySensor(coordinator, entry),
         StatusSensor(coordinator, entry),
         ModelFitSensor(coordinator, entry),
+        ForecastAccuracySensor(coordinator, entry),
     ]
     for day in range(1, MAX_FORECAST_ENTITIES + 1):
         entities.append(ForecastDaySensor(coordinator, entry, day))
@@ -75,7 +76,7 @@ class CheapestDaySensor(_FuelPredictorEntity):
         result = self._data.get("forecast")
         if not result:
             return {}
-        return {
+        attrs: dict[str, Any] = {
             "cheapest_date": result.cheapest_day.day.isoformat(),
             "cheapest_source": result.cheapest_day.source,
             "horizon": [
@@ -88,6 +89,13 @@ class CheapestDaySensor(_FuelPredictorEntity):
                 for p in result.points
             ],
         }
+        # Live cycle position: where are we in the price-hike cycle today.
+        predictor = getattr(self.coordinator, "predictor", None)
+        if predictor is not None and result.points:
+            cycle = predictor.cycle_state(result.points[0].day)
+            if cycle:
+                attrs.update(cycle)
+        return attrs
 
 
 class CheapestStationTodaySensor(_FuelPredictorEntity):
@@ -163,6 +171,38 @@ class ModelFitSensor(_FuelPredictorEntity):
     def _metrics(self) -> dict[str, Any]:
         predictor = getattr(self.coordinator, "predictor", None)
         return getattr(predictor, "train_metrics", None) or {}
+
+
+class ForecastAccuracySensor(_FuelPredictorEntity):
+    """Forecast-vs-actual accuracy from the persisted forecast ledger.
+
+    State = overall MAE (c/L) across all paired forecast/actual days. Attributes
+    carry MAE-by-days-out (how accuracy degrades with horizon), recent pairs
+    for a scatter view, and coverage so a fresh install is honestly sparse.
+    """
+
+    _attr_key = "forecast_accuracy"
+    _attr_name = "Forecast accuracy"
+    _attr_native_unit_of_measurement = UNIT_CENTS_PER_LITRE
+    _attr_icon = "mdi:target"
+
+    @property
+    def native_value(self) -> float | None:
+        accuracy = self._data.get("accuracy") or {}
+        mae = accuracy.get("overall_mae")
+        return round(float(mae), 2) if mae is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        accuracy = self._data.get("accuracy") or {}
+        return {
+            "n_pairs": accuracy.get("n_pairs", 0),
+            "bias": accuracy.get("bias"),
+            "mae_by_days_out": accuracy.get("mae_by_days_out", []),
+            "recent": accuracy.get("recent", []),
+            "coverage_forecast_days": accuracy.get("coverage_forecast_days", 0),
+            "coverage_actual_days": accuracy.get("coverage_actual_days", 0),
+        }
 
 
 class ForecastDaySensor(_FuelPredictorEntity):

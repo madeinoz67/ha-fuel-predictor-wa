@@ -258,6 +258,8 @@ class FuelPricePredictor:
         # Cycle state.
         self._hike_days: list[int] = []
         self._L: int = DEFAULT_CYCLE_LEN
+        # Raw days-since-last-hike at the last training day (drives cycle_state).
+        self._days_since_hike_at_fit: int = 0
         # Empirical fade curve: mean price per cycle_pos (0..L-1) across all
         # observed cycles. Drives the per-day forecast SHAPE in
         # _predict_calibrated (the cheapest-day signal). Empty when fewer than
@@ -324,6 +326,9 @@ class FuelPricePredictor:
         L = median_cycle_len(hikes)
         self._hike_days = hikes
         self._L = L
+        # Raw days-since-last-hike at the last training day; advanced by elapsed
+        # days in cycle_state() to give the live "where are we now" position.
+        self._days_since_hike_at_fit = cycle_pos_at(n - 1, hikes)
 
         # Empirical fade curve (the cheapest-day signal).
         self._fade_curve = {}
@@ -417,6 +422,33 @@ class FuelPricePredictor:
         # Full pure-fade model (the production path).
         self._predict_calibrated(start, horizon, known, known_days, points)
         return sorted(points, key=lambda p: p.day)
+
+    # ---- cycle state (diagnostic) ----------------------------------------
+    def cycle_state(self, anchor_date: date) -> dict:
+        """Live cycle position as of ``anchor_date`` (today).
+
+        Advances the fit-time days-since-last-hike by elapsed calendar days,
+        mirroring exactly how ``_predict_calibrated`` advances the cycle phase
+        — so this reports the cycle the model *believes* it is in, not a fresh
+        re-detection on a short trailing window. Returns ``{}`` when the model
+        is unfitted or was fit at a tier with no cycle signal (constant tier;
+        weekday_mean/constant never set ``_last_fit_date``).
+
+          - cycle_pos: 0..L-1 (0 = a hike just landed)
+          - days_since_last_hike: raw, unmodded
+          - expected_next_hike_in_days: L - cycle_pos (0 = a hike is "due")
+        """
+        if not self._fitted or self._last_fit_date is None or self._L <= 0:
+            return {}
+        elapsed = max(0, (anchor_date - self._last_fit_date).days)
+        dsh = self._days_since_hike_at_fit + elapsed
+        cp = dsh % self._L
+        return {
+            "cycle_pos": cp,
+            "cycle_len_days": self._L,
+            "days_since_last_hike": dsh,
+            "expected_next_hike_in_days": max(0, self._L - cp),
+        }
 
     # ---- cheapest (static) ------------------------------------------------
     @staticmethod

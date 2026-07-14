@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from . import forecast_ledger
 from .const import (
     CONF_FORECAST_HORIZON_DAYS,
     CONF_PRODUCT,
@@ -35,6 +36,17 @@ from .predictor import ForecastResult, FuelPricePredictor
 from .trainer import assemble_and_train, load_model, save_model
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _persist_and_score_ledger(storage_dir, issued_date, points, actual_cpl):
+    """Append today's forecast snapshot + actual to the ledger, then score it.
+
+    Runs in the executor (file I/O). Coordinator wraps the call so any failure
+    here is logged-and-skipped, never breaking the forecast.
+    """
+    forecast_ledger.append_forecast(storage_dir, issued_date, points)
+    forecast_ledger.append_actual(storage_dir, issued_date, actual_cpl)
+    return forecast_ledger.load_accuracy(storage_dir)
 
 
 class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
@@ -150,4 +162,19 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         stations_sorted = sorted(today, key=lambda s: s.get("price", float("inf")))[
             : self.station_limit
         ]
-        return {"forecast": forecast, "today": stations_sorted}
+        # Forecast accuracy ledger: snapshot today's forecast + record today's
+        # actual, then score forecast-vs-actual. Best-effort — a ledger failure
+        # must never break the forecast. File I/O runs in the executor.
+        actual_today = known.get(today_date)
+        try:
+            accuracy = await self.hass.async_add_executor_job(
+                _persist_and_score_ledger,
+                self._storage_dir(),
+                today_date,
+                points,
+                actual_today,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("forecast ledger update skipped: %s", err)
+            accuracy = {}
+        return {"forecast": forecast, "today": stations_sorted, "accuracy": accuracy}
