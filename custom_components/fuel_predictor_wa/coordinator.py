@@ -41,7 +41,7 @@ from .const import (
     UPDATE_INTERVAL_MINUTES,
 )
 from .fuelwatch import FuelWatchClient
-from .historic_client import async_fetch_month_cached
+from .historic_client import async_fetch_month_cached, fetch_wholesale_series
 from .predictor import ForecastResult, FuelPricePredictor
 from .trainer import assemble_and_train, load_model, save_model
 
@@ -157,6 +157,18 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
 
         return _fetch
 
+    async def _async_fetch_tgp(self) -> dict | None:
+        """Fetch the WA wholesale (TGP) series for the leading-indicator drift.
+
+        Best-effort — a TGP fetch failure falls back to no drift (β stays None).
+        """
+        try:
+            description = PRODUCT_CSV_DESCRIPTION[self.product]
+            return await fetch_wholesale_series(self.hass, self._storage_dir(), description)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("TGP fetch skipped, training without drift term: %s", err)
+            return None
+
     async def _async_train_background(self, retrain: bool = False) -> None:
         if self._train_in_progress:
             return
@@ -166,11 +178,13 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         try:
             await self._async_resolve_catchment()
             suburbs_filter = set(self.catchment["suburbs"]) if self.catchment else None
+            tgp_series = await self._async_fetch_tgp()
             predictor = await assemble_and_train(
                 self._build_fetch_month(),
                 date.today(),
                 executor=self.hass.async_add_executor_job,
                 suburbs_filter=suburbs_filter,
+                tgp_series=tgp_series,
             )
             await self.hass.async_add_executor_job(save_model, predictor, self._storage_dir())
             self.predictor = predictor

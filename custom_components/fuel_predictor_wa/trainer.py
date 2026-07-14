@@ -55,9 +55,11 @@ def series_from_records(
     return series
 
 
-def fit_predictor(series: dict[date, float]) -> FuelPricePredictor:
+def fit_predictor(
+    series: dict[date, float], tgp_series: dict[date, float] | None = None
+) -> FuelPricePredictor:
     predictor = FuelPricePredictor()
-    predictor.fit(series)
+    predictor.fit(series, tgp_series=tgp_series)
     return predictor
 
 
@@ -106,6 +108,7 @@ async def assemble_and_train(
     months: int = HISTORY_MONTHS_TARGET,
     executor: Executor | None = None,
     suburbs_filter: set[str] | None = None,
+    tgp_series: dict[date, float] | None = None,
 ) -> FuelPricePredictor:
     """Fetch `months` months via `fetch_month`, fit, and return the predictor.
 
@@ -130,4 +133,4 @@ async def assemble_and_train(
             records.extend(month_records)
     if fetched < MIN_MONTHS_TO_TRAIN:
         raise RuntimeError(f"training needs >= {MIN_MONTHS_TO_TRAIN} months, got {fetched}")
-    return await run(fit_predictor, series_from_records(records, suburbs_filter))
+    return await run(fit_predictor, series_from_records(records, suburbs_filter), tgp_series)

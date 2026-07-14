@@ -105,6 +105,73 @@ def _mutable_months(today: date) -> set[tuple[int, int]]:
     return {cur, (py, pm)}
 
 
+WHOLESALE_TEMPLATE = "FuelWatchWholesale-{yyyy}.csv"
+
+
+def parse_wholesale_csv(text: str, product_description: str | None = None) -> list[dict[str, Any]]:
+    """Parse a FuelWatch *wholesale* (terminal-gate) monthly/yearly CSV.
+
+    Same shape as the retail file except the product column is ``PRODUCT`` (not
+    ``PRODUCT_DESCRIPTION``), so it gets its own parser. Records: {date, price,
+    product, suburb}.
+    """
+    reader = csv.DictReader(StringIO(text))
+    records: list[dict[str, Any]] = []
+    for row in reader:
+        if product_description is not None and row.get("PRODUCT") != product_description:
+            continue
+        try:
+            d = _parse_date(row[_COL_DATE])
+            price = float(row[_COL_PRICE])
+        except (KeyError, ValueError, TypeError):
+            continue
+        records.append(
+            {
+                "date": d,
+                "price": price,
+                "product": row.get("PRODUCT"),
+                "suburb": row.get(_COL_SUBURB),
+            }
+        )
+    return records
+
+
+async def fetch_wholesale_series(
+    hass: Any,
+    storage_dir: Path,
+    product_description: str,
+    years: int = 3,
+) -> dict[date, float]:
+    """WA terminal-gate price min/day for one product, from cached wholesale CSVs.
+
+    The wholesale yearly CSVs (``FuelWatchWholesale-{yyyy}.csv``) sit on the same
+    blob as the retail monthly files and carry the Singapore-Mogas-derived
+    wholesale price WA retailers pay. Cached like the retail months.
+    """
+    cache_dir = Path(storage_dir) / BULK_CACHE_DIRNAME
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    today = date.today()
+    by_date: dict[date, float] = {}
+    for offset in range(years):
+        yr = today.year - offset
+        cached = cache_dir / f"wholesale-{yr}.csv"
+        mutable = offset == 0  # current year still gains days
+        if cached.exists() and not mutable:
+            text = await hass.async_add_executor_job(cached.read_text)
+        else:
+            url = f"{HISTORIC_CSV_BASE}/{WHOLESALE_TEMPLATE.format(yyyy=yr)}"
+            session = async_get_clientsession(hass)
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                resp.raise_for_status()
+                text = await resp.text()
+            await hass.async_add_executor_job(cached.write_text, text)
+        for r in parse_wholesale_csv(text, product_description):
+            d, p = r["date"], r["price"]
+            if d not in by_date or p < by_date[d]:
+                by_date[d] = p
+    return by_date
+
+
 async def async_fetch_month_cached(
     hass: Any,
     storage_dir: Path,

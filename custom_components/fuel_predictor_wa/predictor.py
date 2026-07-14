@@ -29,6 +29,7 @@ Public contract preserved:
 
 from __future__ import annotations
 
+import bisect
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -52,6 +53,8 @@ VOLATILITY_WINDOW = 7
 
 CLAMP_LO = 0.85  # clamp factor on min28
 CLAMP_HI = 1.15  # clamp factor on max28
+
+TGP_LAG_DAYS = 10  # wholesale TGP → retail pass-through window (drift term)
 
 
 # --- Public dataclasses (contract) ------------------------------------------
@@ -154,6 +157,32 @@ def median_cycle_len(hike_days: list[int]) -> int:
     intervals = [hike_days[i + 1] - hike_days[i] for i in range(len(hike_days) - 1)]
     L = int(round(float(np.median(intervals))))
     return max(MIN_CYCLE_LEN, min(MAX_CYCLE_LEN, L))
+
+
+def _tgp_return(
+    tgp_sorted: list[tuple[date, float]], anchor_date: date, lag: int
+) -> float | None:
+    """Recent wholesale TGP return over ``lag`` days ending at/before ``anchor_date``.
+
+    ``tgp_sorted`` is (date, price) ascending. Returns the fractional change
+    between the TGP ``lag`` days before the anchor and the TGP at/before the
+    anchor — the leading-indicator signal — or None if either side is missing.
+    Causal: only uses TGP on/before the anchor date.
+    """
+    if not tgp_sorted or lag <= 0:
+        return None
+    dates = [d for d, _ in tgp_sorted]
+    i_now = bisect.bisect_right(dates, anchor_date) - 1
+    if i_now < 0:
+        return None
+    i_past = bisect.bisect_right(dates, anchor_date - timedelta(days=lag)) - 1
+    if i_past < 0:
+        return None
+    now = tgp_sorted[i_now][1]
+    past = tgp_sorted[i_past][1]
+    if not past:
+        return None
+    return now / past - 1.0
 
 
 def build_row_features(
@@ -272,12 +301,19 @@ class FuelPricePredictor:
         self._prices_tail: list[float] = []
         self._min28: float = 0.0
         self._max28: float = 0.0
+        # Wholesale TGP drift term (leading indicator). β is fit on the fade
+        # model's walk-forward residuals vs the TGP return over TGP_LAG_DAYS;
+        # applied at predict time as a level drift. None/empty => no drift.
+        self._tgp_beta: float | None = None
+        self._tgp_lag: int = TGP_LAG_DAYS
+        self._tgp_series: dict[date, float] = {}
 
     # ---- fit --------------------------------------------------------------
     def fit(
         self,
         prices_by_date: dict[date, float],
         global_history: dict[str, dict[date, float]] | None = None,  # noqa: ARG002 — accepted, ignored
+        tgp_series: dict[date, float] | None = None,
     ) -> None:
         """Fit on {date: price} for one product.
 
@@ -367,7 +403,13 @@ class FuelPricePredictor:
             return
 
         self._model_kind = "fade"
-        metrics = self._walk_forward(series=series, dates=dates, hold=min(28, n // 5))
+        # Wholesale TGP drift term: fit β on the fade residuals vs the TGP return.
+        self._tgp_series = tgp_series or {}
+        tgp_sorted = sorted(self._tgp_series.items()) or None
+        metrics = self._walk_forward(
+            series=series, dates=dates, hold=min(28, n // 5), tgp_sorted=tgp_sorted
+        )
+        self._tgp_beta = metrics.get("tgp_beta")
         metrics["model_kind"] = self._model_kind
         metrics["n_train"] = n
         metrics["n_hikes"] = len(hikes)
@@ -542,6 +584,16 @@ class FuelPricePredictor:
             elapsed = max(0, (anchor_date - self._last_fit_date).days)
             anchor_cp = (self._last_fit_cp + elapsed) % L
             anchor_fade = self._fade_curve.get(anchor_cp, self._fade_mean)
+            # Leading-indicator level drift: β · recent wholesale TGP return.
+            # getattr: models pickled before this field existed degrade to no drift.
+            drift = 0.0
+            _beta = getattr(self, "_tgp_beta", None)
+            _tgp = getattr(self, "_tgp_series", {}) or {}
+            if _beta is not None and _tgp:
+                _lag = getattr(self, "_tgp_lag", TGP_LAG_DAYS)
+                _gret = _tgp_return(sorted(_tgp.items()), anchor_date, _lag)
+                if _gret is not None:
+                    drift = _beta * _gret
             for i in range(horizon):
                 day = start + timedelta(days=i)
                 if day in known_days:
@@ -549,7 +601,7 @@ class FuelPricePredictor:
                 # Days from the anchor to this forecast day.
                 day_cp = (self._last_fit_cp + elapsed + (day - anchor_date).days) % L
                 day_fade = self._fade_curve.get(day_cp, self._fade_mean)
-                final = anchor_price + (day_fade - anchor_fade)
+                final = anchor_price + (day_fade - anchor_fade) + drift
                 final = max(lo_clamp, min(hi_clamp, final))
                 points.append(DayForecast(day, round(final, 1), "forecast"))
             return
@@ -563,6 +615,7 @@ class FuelPricePredictor:
         series: list[float],
         dates: list[date],
         hold: int,
+        tgp_sorted: list[tuple[date, float]] | None = None,
     ) -> dict:
         """Walk-forward holdout scored against the pure-fade forecast.
 
@@ -583,6 +636,7 @@ class FuelPricePredictor:
                 "post_hike_mae": None,
                 "normal_mae": None,
                 "n_holdout": 0,
+                "tgp_beta": None,
             }
 
         lo_clamp = CLAMP_LO * self._min28
@@ -601,6 +655,9 @@ class FuelPricePredictor:
         baseline_errors: list[float] = []
         post_hike_errors: list[float] = []
         normal_errors: list[float] = []
+        # Signed residuals + TGP returns for the leading-indicator β fit.
+        beta_resid: list[float] = []
+        beta_gret: list[float] = []
 
         # Hike-threshold for "is h a post-hike day" labelling.
         diffs_all = np.diff(np.asarray(series, dtype=float))
@@ -638,6 +695,11 @@ class FuelPricePredictor:
             err_h = abs(actual_h - pred_h)
             mae_errors.append(err_h)
             wf_pairs.append((actual_h, err_h))
+            if tgp_sorted is not None:
+                gret = _tgp_return(tgp_sorted, dates[anchor_t], TGP_LAG_DAYS)
+                if gret is not None:
+                    beta_resid.append(actual_h - pred_h)
+                    beta_gret.append(gret)
 
             # Average-baseline prediction at h (weekday_mean + recent_mean),
             # trained on the same prefix.
@@ -667,6 +729,7 @@ class FuelPricePredictor:
                 "post_hike_mae": None,
                 "normal_mae": None,
                 "n_holdout": 0,
+                "tgp_beta": None,
             }
 
         mae = float(np.mean(mae_errors))
@@ -682,6 +745,12 @@ class FuelPricePredictor:
         post_hike_mae = float(np.mean(post_hike_errors)) if post_hike_errors else None
         normal_mae = float(np.mean(normal_errors)) if normal_errors else None
         beats = bool(mae < baseline_mae) if baseline_mae is not None else None
+        if beta_gret:
+            _beta_den = float(sum(g * g for g in beta_gret))
+            _beta_num = sum(r * g for r, g in zip(beta_resid, beta_gret, strict=True))
+            tgp_beta = (_beta_num / _beta_den) if _beta_den else None
+        else:
+            tgp_beta = None
         return {
             "mae": mae,
             "mape_pct": mape_pct,
@@ -691,6 +760,8 @@ class FuelPricePredictor:
             "normal_mae": normal_mae,
             "n_holdout": len(mae_errors),
             "beats_baseline": beats,
+            "tgp_beta": tgp_beta,
+            "tgp_lag": TGP_LAG_DAYS,
         }
 
     # ---- internal: empty metrics for the bottom two tiers -----------------

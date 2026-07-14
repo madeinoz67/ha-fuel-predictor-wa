@@ -27,6 +27,11 @@ async def _no_catchment() -> None:
     return None
 
 
+async def _no_tgp() -> None:
+    """Override for _async_fetch_tgp: no wholesale fetch in tests (no drift term)."""
+    return None
+
+
 @pytest.mark.asyncio
 async def test_first_refresh_trains_and_marks_ready(hass, tmp_path, monkeypatch) -> None:
     """With no artifact and a stubbed fetch, first refresh ends status=ready."""
@@ -53,6 +58,7 @@ async def test_first_refresh_trains_and_marks_ready(hass, tmp_path, monkeypatch)
     # Catchment resolution hits the FuelWatch suburbs API (network); override it
     # so the test trains WA-wide deterministically.
     monkeypatch.setattr(coord, "_async_resolve_catchment", _no_catchment)
+    monkeypatch.setattr(coord, "_async_fetch_tgp", _no_tgp)
 
     # Stub the trainer so it does not hit the network.
     async def _fake_fetch(year, month):
@@ -97,6 +103,7 @@ async def test_predict_runs_in_executor(hass, tmp_path, monkeypatch) -> None:
     coord = FuelPredictorDataUpdateCoordinator(hass, _Entry())
     coord.client = _StubClient()
     monkeypatch.setattr(coord, "_async_resolve_catchment", _no_catchment)
+    monkeypatch.setattr(coord, "_async_fetch_tgp", _no_tgp)
 
     async def _fake_fetch(year, month):
         return [
