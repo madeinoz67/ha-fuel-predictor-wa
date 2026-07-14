@@ -1,37 +1,37 @@
-"""Cycle-aware HGBR + offset-calibration fuel-price forecaster.
+"""Cycle-aware pure-fade fuel-price forecaster (numpy-only).
 
-Replaces the average-baseline internals (which systematically under-forecast
-post-hike by ~the recent_mean-to-peak gap, ~19c/L on WA's weekly cycle) while
-preserving the public contract the coordinator depends on:
+The production forecast is an empirical-fade curve anchored to the live known
+price:
+
+    forecast(day) = anchor_price + (fade[day_cp] - fade[anchor_cp])
+
+where ``fade[cp]`` is the mean historical price at cycle-position ``cp``. This
+kills the post-hike bias that an average-baseline suffers (it under-forecasts
+post-hike by ~the recent_mean-to-peak gap, ~19c/L on WA's weekly cycle) because
+the LEVEL is pinned by the live anchor while the SHAPE comes from the observed
+cycle.
+
+No third-party ML libraries are used. An earlier gradient-boosting / ridge
+regression path was vestigial: ML-6 found the pure-fade forecast beats it, and
+that regressor was only fit for the comparison metric, never used in
+``predict``. Dropping it leaves the forecast unchanged; only the train_metrics
+computation (now a numpy pure-fade holdout) differs. This also resolves the
+install failure on Home Assistant's Python 3.14, where no prebuilt wheel for
+the ML dependency is available and its source build fails.
+
+Public contract preserved:
 
   - class FuelPricePredictor with fit / predict / cheapest
   - DayForecast(day, price_cpl, source)
   - ForecastResult(points, cheapest_day) with .cheapest_price
   - the _fitted flag
-
-Design:
-
-  1. detect_hikes() finds prominent positive price spikes (cycle starts).
-  2. build_row_features() turns each day into 6 CAUSAL features (only past
-     prices) — cycle_pos, weekday, level, last_hike_mag, dist_to_expected_peak,
-     recent_volatility.
-  3. fit() picks a tier by data volume (constant < weekday_mean < ridge_degraded
-     < histgbr), measures itself on a walk-forward holdout, then refits on all
-     data for production.
-  4. predict() applies OFFSET CALIBRATION: the difference between the model's
-     raw prediction at a known anchor day and that day's actual price becomes a
-     level-shifting offset added to every forecast day. This pins the forecast
-     to the live known price and is what kills the post-hike bias.
-
-sklearn is imported lazily inside fit() so the unfitted fast path (and the
-tests that don't need it) never require sklearn on the import graph.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from statistics import mean
 
 import numpy as np
@@ -165,6 +165,12 @@ def build_row_features(
 ) -> list[float]:
     """Build the 6 CAUSAL features for row ``t``.
 
+    Retained as a numpy utility + the surface exercised by the causality
+    regression test. The pure-fade production model does not call this (the
+    fade curve replaces the GBM that consumed it), but the shape is kept so a
+    future numpy ridge has a design matrix ready and the causality invariant
+    stays pinned.
+
     Row ``t`` predicts ``prices[t]`` and uses ONLY ``prices[0..t-1]`` plus the
     pre-computed ``hike_days``. ``weekday`` is the weekday of day t (passed in
     so this function stays pure on the price list).
@@ -206,18 +212,36 @@ def build_row_features(
     return [float(cp), float(weekday), level, last_hike_mag, float(dist), recent_vol]
 
 
+def _fade_curve_for(
+    series: list[float], hikes: list[int], L: int
+) -> tuple[dict[int, float], float]:
+    """Empirical fade curve over ``series``: mean price per cycle_pos % L.
+
+    Returns (fade_curve {cp: mean_price}, fade_mean). fade_mean is the mean of
+    the fade_curve values (the cycle's average level) and is the fallback for
+    any cycle_pos missing from the curve.
+    """
+    if not hikes or L <= 0:
+        return {}, float(np.mean(series)) if series else 0.0
+    by_cp: dict[int, list[float]] = {}
+    for i, price in enumerate(series):
+        cp = cycle_pos_at(i, hikes) % L
+        by_cp.setdefault(cp, []).append(price)
+    fade = {cp: float(np.mean(ps)) for cp, ps in by_cp.items()}
+    fade_mean = float(np.mean(list(fade.values()))) if fade else float(np.mean(series))
+    return fade, fade_mean
+
+
 # --- The predictor ----------------------------------------------------------
 class FuelPricePredictor:
     """Cycle-aware fuel-price forecaster for one product.
 
-    Tiered by available history:
+    Tiered by available history (all numpy):
 
-      - n < 7            -> constant (repeat latest price)
-      - n < 14           -> weekday_mean (old average-baseline math)
-      - n < 35 or <3 hikes -> ridge_degraded (Ridge on weekday + level)
-      - else             -> histgbr (HistGradientBoostingRegressor on 6 features)
-
-    Every tier with a regressor uses offset calibration at predict time.
+      - n < 7                  -> constant (repeat latest price)
+      - n < 14                 -> weekday_mean (average-baseline math)
+      - n >= 14 and >= 3 hikes -> fade (empirical-fade-anchored; production)
+      - n >= 14, < 3 hikes     -> weekday_mean (no cycle signal to fade on)
     """
 
     def __init__(self) -> None:
@@ -230,9 +254,6 @@ class FuelPricePredictor:
         self._overall_mean: float = 0.0
         self._recent_mean: float = 0.0
         self._latest_price: float | None = None
-        # Regressor + feature config (set by fit when a regressor is chosen).
-        self._regressor = None  # sklearn estimator (Ridge or HGBR)
-        self._feature_cols: list[int] = list(range(6))
         self._model_kind: str = "unfitted"
         # Cycle state.
         self._hike_days: list[int] = []
@@ -240,19 +261,29 @@ class FuelPricePredictor:
         # Empirical fade curve: mean price per cycle_pos (0..L-1) across all
         # observed cycles. Drives the per-day forecast SHAPE in
         # _predict_calibrated (the cheapest-day signal). Empty when fewer than
-        # one hike was detected in training -> predict falls back to the GBM.
+        # one hike was detected in training -> predict falls back to weekday_mean.
         self._fade_curve: dict[int, float] = {}
         self._fade_mean: float = 0.0  # mean of fade_curve values (cycle mean)
         self._last_fit_date: date | None = None
         self._last_fit_cp: int = 0  # cycle_pos of the last training day
-        # Tail context for predict().
+        # Tail context for predict() clamp.
         self._prices_tail: list[float] = []
         self._min28: float = 0.0
         self._max28: float = 0.0
 
     # ---- fit --------------------------------------------------------------
-    def fit(self, prices_by_date: dict[date, float]) -> None:
-        """Fit on {date: price} for one product."""
+    def fit(
+        self,
+        prices_by_date: dict[date, float],
+        global_history: dict[str, dict[date, float]] | None = None,  # noqa: ARG002 — accepted, ignored
+    ) -> None:
+        """Fit on {date: price} for one product.
+
+        ``global_history`` is accepted for backward-compatibility of the call
+        signature but is no longer used: the global leading-indicator features
+        only fed the (now-removed) GBM design matrix, and the pure-fade model
+        has no design matrix to extend.
+        """
         if not prices_by_date:
             self._fitted = False
             return
@@ -260,6 +291,7 @@ class FuelPricePredictor:
         dates = [d for d, _ in items]
         series = [float(p) for _, p in items]
         n = len(series)
+        trained_at = datetime.now(UTC).isoformat()
 
         # Always populate the cheap fallback state.
         by_weekday: list[list[float]] = [[] for _ in range(7)]
@@ -279,7 +311,11 @@ class FuelPricePredictor:
             self._hike_days = []
             self._L = DEFAULT_CYCLE_LEN
             self.train_metrics = self._empty_metrics(
-                n_train=n, n_hikes=0, cycle_len=DEFAULT_CYCLE_LEN, model_kind="constant"
+                n_train=n,
+                n_hikes=0,
+                cycle_len=DEFAULT_CYCLE_LEN,
+                model_kind="constant",
+                trained_at=trained_at,
             )
             self._fitted = True
             return
@@ -289,97 +325,49 @@ class FuelPricePredictor:
         self._hike_days = hikes
         self._L = L
 
-        # Empirical fade curve (the cheapest-day signal). For each cycle_pos
-        # 0..L-1, the mean price observed at that phase across all full
-        # cycles in the training series. _predict_calibrated anchors to the
-        # live known price and applies (fade[day_cp] - fade[anchor_cp]) to
-        # reconstruct the per-day fade shape that the GBM could not reliably
-        # produce (its `level` feature dominates and the trailing-window
-        # cycle_pos goes out-of-distribution at predict time).
+        # Empirical fade curve (the cheapest-day signal).
         self._fade_curve = {}
         self._fade_mean = self._overall_mean
         self._last_fit_date = dates[-1] if dates else None
         self._last_fit_cp = 0
         if hikes and L > 0:
-            by_cp: dict[int, list[float]] = {}
-            for i, price in enumerate(series):
-                cp = cycle_pos_at(i, hikes) % L
-                by_cp.setdefault(cp, []).append(price)
-            self._fade_curve = {cp: float(np.mean(ps)) for cp, ps in by_cp.items()}
-            if self._fade_curve:
-                self._fade_mean = float(np.mean(list(self._fade_curve.values())))
+            self._fade_curve, self._fade_mean = _fade_curve_for(series, hikes, L)
             self._last_fit_cp = cycle_pos_at(n - 1, hikes) % L
 
         # Tier 2: weekday_mean (old average-baseline math).
         if n < 14:
             self._model_kind = "weekday_mean"
             self.train_metrics = self._empty_metrics(
-                n_train=n, n_hikes=len(hikes), cycle_len=L, model_kind="weekday_mean"
+                n_train=n,
+                n_hikes=len(hikes),
+                cycle_len=L,
+                model_kind="weekday_mean",
+                trained_at=trained_at,
             )
             self._fitted = True
             return
 
-        # Build the full feature matrix (rows where features are defined).
-        rows_t = list(range(MIN_LEVEL_WINDOW, n))
-        X = np.asarray(
-            [build_row_features(series, t, hikes, L, weekday=dates[t].weekday()) for t in rows_t],
-            dtype=float,
-        )
-        y = np.asarray([series[t] for t in rows_t], dtype=float)
+        # Tier 3: full pure-fade model (needs a cycle signal — >=3 hikes).
+        # Fewer hikes -> weekday_mean fallback (no cycle to fade on).
+        if len(hikes) < 3:
+            self._model_kind = "weekday_mean"
+            self.train_metrics = self._empty_metrics(
+                n_train=n,
+                n_hikes=len(hikes),
+                cycle_len=L,
+                model_kind="weekday_mean",
+                trained_at=trained_at,
+            )
+            self._fitted = True
+            return
 
-        # Tier selection for the regressor.
-        if n < 35 or len(hikes) < 3:
-            self._model_kind = "ridge_degraded"
-            from sklearn.linear_model import Ridge
-
-            def _factory() -> Ridge:
-                return Ridge(alpha=1.0)
-
-            feature_cols = [1, 2]  # weekday, level
-        else:
-            self._model_kind = "histgbr"
-            from sklearn.ensemble import HistGradientBoostingRegressor
-
-            def _factory() -> HistGradientBoostingRegressor:  # type: ignore[override]
-                return HistGradientBoostingRegressor(
-                    loss="squared_error",
-                    max_iter=300,
-                    learning_rate=0.05,
-                    max_leaf_nodes=15,
-                    min_samples_leaf=20,
-                    l2_regularization=1.0,
-                    early_stopping=True,
-                    random_state=42,
-                    validation_fraction=0.15,
-                )
-
-            feature_cols = list(range(6))
-
-        # Walk-forward holdout (honest fit metric). Step so we do at most
-        # ~7 refits even on long series -> stays well under 1.5s on ~730 rows.
-        hold = min(28, n // 5)
-        metrics = self._walk_forward(
-            series=series,
-            dates=dates,
-            rows_t=rows_t,
-            X=X,
-            y=y,
-            feature_cols=feature_cols,
-            factory=_factory,
-            hold=hold,
-            hikes=hikes,
-        )
-
-        # Refit the chosen regressor on ALL data for production.
-        regressor = _factory()
-        regressor.fit(X[:, feature_cols], y)
-        self._regressor = regressor
-        self._feature_cols = feature_cols
-
+        self._model_kind = "fade"
+        metrics = self._walk_forward(series=series, dates=dates, hold=min(28, n // 5))
         metrics["model_kind"] = self._model_kind
         metrics["n_train"] = n
         metrics["n_hikes"] = len(hikes)
         metrics["cycle_len_days"] = L
+        metrics["trained_at"] = trained_at
         self.train_metrics = metrics
         self._fitted = True
 
@@ -389,8 +377,14 @@ class FuelPricePredictor:
         start: date,
         horizon: int,
         known: dict[date, float] | None = None,
+        global_recent: dict[str, dict[date, float]] | None = None,  # noqa: ARG002 — accepted, ignored
     ) -> list[DayForecast]:
-        """Predict ``horizon`` days from ``start``, overriding with ``known``."""
+        """Predict ``horizon`` days from ``start``, overriding with ``known``.
+
+        ``global_recent`` is accepted for backward-compatibility of the call
+        signature but is no longer used (the GBM+offset path that consumed it
+        is gone). All forecasts use the pure-fade-anchored path.
+        """
         known = known or {}
         points: list[DayForecast] = []
 
@@ -420,7 +414,7 @@ class FuelPricePredictor:
             self._predict_weekday_mean(start, horizon, known, known_days, points)
             return sorted(points, key=lambda p: p.day)
 
-        # Full regressor path with offset calibration (ridge_degraded + histgbr).
+        # Full pure-fade model (the production path).
         self._predict_calibrated(start, horizon, known, known_days, points)
         return sorted(points, key=lambda p: p.day)
 
@@ -487,18 +481,17 @@ class FuelPricePredictor:
     ) -> None:
         """Forecast via the empirical fade curve anchored to the known price.
 
-        Primary path (cheapest-day signal): the per-day forecast SHAPE comes
-        from the historical fade curve (mean price per cycle_pos), and the
-        LEVEL is pinned by the live known anchor price:
+        The per-day forecast SHAPE comes from the historical fade curve (mean
+        price per cycle_pos), and the LEVEL is pinned by the live known anchor
+        price:
 
             forecast(day) = anchor_price + (fade[day_cp] - fade[anchor_cp])
 
         The anchor's cycle_pos is derived from the FIT-TIME cycle phase
         advanced by elapsed days (mod L), NOT by re-detecting hikes on a short
         trailing window (which went out-of-distribution on real WA data and
-        flattened the forecast -> argmin noise). Falls back to the GBM
-        offset-calibrated path when no fade curve is available (too few hikes
-        in training).
+        flattened the forecast -> argmin noise). Falls back to weekday_mean
+        when no fade curve is available (too few hikes in training).
         """
         if known:
             anchor_date = max(known)
@@ -527,94 +520,27 @@ class FuelPricePredictor:
                 points.append(DayForecast(day, round(final, 1), "forecast"))
             return
 
-        # Fallback: GBM offset-calibrated forecast (no fade curve — e.g. too
-        # few hikes in training). This is the pre-ML6 per-day path.
-        self._predict_calibrated_gbm(start, horizon, known, known_days, points)
+        # Fallback: no fade curve (too few hikes in training) -> weekday_mean.
+        self._predict_weekday_mean(start, horizon, known, known_days, points)
 
-    # ---- internal: GBM offset-calibrated predict (fallback) ---------------
-    def _predict_calibrated_gbm(
-        self,
-        start: date,
-        horizon: int,
-        known: dict[date, float],
-        known_days: set[date],
-        points: list[DayForecast],
-    ) -> None:
-        # Build trailing context = self._prices_tail + sorted known prices.
-        trailing: list[float] = list(self._prices_tail)
-        known_sorted = sorted(known.items())
-        for _d, p in known_sorted:
-            trailing.append(float(p))
-
-        # Detect hikes on the initial trailing (uses ONLY known prices, never
-        # forecast outputs). Forecast outputs appended below do NOT refresh
-        # hike_days.
-        hike_days = detect_hikes(trailing) if trailing else list(self._hike_days)
-        L = self._L
-
-        # Anchor = latest known day. If no known, use the last element of
-        # trailing as a virtual anchor at start - 1 day.
-        if known:
-            anchor_date = max(known)
-            anchor_price = float(known[anchor_date])
-        else:
-            anchor_date = start - timedelta(days=1)
-            anchor_price = trailing[-1] if trailing else 0.0
-
-        # Map the anchor to a row index in feature space. The anchor is the
-        # last element of trailing (its row index is len(trailing)-1).
-        anchor_t = max(MIN_LEVEL_WINDOW, len(trailing) - 1)
-        anchor_features = build_row_features(
-            trailing, anchor_t, hike_days, L, weekday=anchor_date.weekday()
-        )
-        raw_anchor = float(
-            self._regressor.predict(
-                np.asarray([anchor_features], dtype=float)[:, self._feature_cols]
-            )[0]
-        )
-        # THE LOAD-BEARING LINE: offset pins the level to the live anchor price.
-        offset = anchor_price - raw_anchor
-
-        lo_clamp = CLAMP_LO * self._min28
-        hi_clamp = CLAMP_HI * self._max28
-
-        for i in range(horizon):
-            day = start + timedelta(days=i)
-            if day in known_days:
-                continue
-            t = len(trailing)  # next index after current trailing
-            feats = build_row_features(trailing, t, hike_days, L, weekday=day.weekday())
-            raw = float(
-                self._regressor.predict(np.asarray([feats], dtype=float)[:, self._feature_cols])[0]
-            )
-            final = raw + offset
-            final = max(lo_clamp, min(hi_clamp, final))
-            final = round(final, 1)
-            points.append(DayForecast(day, final, "forecast"))
-            # Recursive feed-back so lag/level advance.
-            trailing.append(final)
-
-    # ---- internal: walk-forward holdout -----------------------------------
+    # ---- internal: pure-fade walk-forward holdout -------------------------
     def _walk_forward(
         self,
         series: list[float],
         dates: list[date],
-        rows_t: list[int],
-        X: np.ndarray,
-        y: np.ndarray,
-        feature_cols: list[int],
-        factory,
         hold: int,
-        hikes: list[int],
     ) -> dict:
-        """Walk-forward holdout. For each held-out day h, fit on the prefix
-        ending before h-2 (anchor = day h-2), forecast h with offset, score.
-        Also score the average-baseline (weekday_mean + recent_mean) on the
-        same hold for comparison.
+        """Walk-forward holdout scored against the pure-fade forecast.
+
+        For each held-out day h, train on the prefix ending at h-3 (so the
+        anchor at h-2 is "known but not yet in training"), re-detect hikes on
+        that prefix, rebuild the fade curve, run the pure-fade forecast
+        anchored to series[h-2], and score the error vs series[h]. Also score
+        the average-baseline (weekday_mean + recent_mean) on the same hold for
+        comparison.
         """
         n = len(series)
-        if hold < 3 or len(rows_t) < MIN_LEVEL_WINDOW + hold:
-            # Too little data for an honest holdout -> metrics None.
+        if hold < 3 or n < MIN_LEVEL_WINDOW + hold + 3:
             return {
                 "mae": None,
                 "mape_pct": None,
@@ -625,11 +551,10 @@ class FuelPricePredictor:
                 "n_holdout": 0,
             }
 
-        t_to_row = {t: i for i, t in enumerate(rows_t)}
         lo_clamp = CLAMP_LO * self._min28
         hi_clamp = CLAMP_HI * self._max28
 
-        # Step so we do at most ~7 refits.
+        # Step so we do at most ~7 refits of the fade curve.
         step = max(1, hold // 7)
         hold_indices = list(range(n - hold, n, step))
 
@@ -652,43 +577,41 @@ class FuelPricePredictor:
         )
 
         for h in hold_indices:
-            # Need features(h) and features(h-2) computable.
-            if h < MIN_LEVEL_WINDOW + 2 or (h - 2) not in t_to_row or h not in t_to_row:
-                continue
+            # Need anchor at h-2 and a prefix long enough to compute a fade curve.
             anchor_t = h - 2
-            # Train rows: rows_t < anchor_t (features at those rows see only
-            # prices[0..t-1] with t-1 <= anchor_t-1 = h-3; never the anchor).
-            train_idx = [i for i, t in enumerate(rows_t) if t < anchor_t]
-            if len(train_idx) < MIN_LEVEL_WINDOW:
+            prefix_end = anchor_t  # prefix = series[:anchor_t] (indices 0..h-3)
+            if prefix_end < MIN_LEVEL_WINDOW + 2:
                 continue
-            X_train = X[train_idx][:, feature_cols]
-            y_train = y[train_idx]
-            try:
-                reg = factory()
-                reg.fit(X_train, y_train)
-            except Exception:  # noqa: BLE001 — WF must not abort fit
+            prefix = series[:prefix_end]
+            hikes_p = detect_hikes(prefix)
+            L_p = median_cycle_len(hikes_p)
+            # Need >=3 hikes on the prefix for a fade forecast; else skip
+            # (the production tier would route this to weekday_mean).
+            if len(hikes_p) < 3 or not hikes_p:
+                continue
+            fade_p, fade_mean_p = _fade_curve_for(prefix, hikes_p, L_p)
+            if not fade_p:
                 continue
 
-            anchor_row = t_to_row[anchor_t]
-            h_row = t_to_row[h]
-            raw_anchor = float(reg.predict(X[anchor_row : anchor_row + 1][:, feature_cols])[0])
-            raw_h = float(reg.predict(X[h_row : h_row + 1][:, feature_cols])[0])
             anchor_price = series[anchor_t]
-            offset = anchor_price - raw_anchor
-            pred_h = max(lo_clamp, min(hi_clamp, raw_h + offset))
+            anchor_cp = cycle_pos_at(anchor_t, hikes_p) % L_p
+            target_cp = cycle_pos_at(h, hikes_p) % L_p
+            pred_h = anchor_price + (
+                fade_p.get(target_cp, fade_mean_p) - fade_p.get(anchor_cp, fade_mean_p)
+            )
+            pred_h = max(lo_clamp, min(hi_clamp, pred_h))
             actual_h = series[h]
             err_h = abs(actual_h - pred_h)
             mae_errors.append(err_h)
             wf_pairs.append((actual_h, err_h))
 
-            # Average-baseline prediction at h (the OLD predictor's math),
+            # Average-baseline prediction at h (weekday_mean + recent_mean),
             # trained on the same prefix.
-            prefix_prices = series[: h - 1]
-            prefix_dates = dates[: h - 1]
-            recent = mean(prefix_prices[-28:]) if prefix_prices else self._overall_mean
-            overall = mean(prefix_prices) if prefix_prices else self._overall_mean
+            prefix_dates = dates[:prefix_end]
+            recent = mean(prefix[-28:]) if prefix else self._overall_mean
+            overall = mean(prefix) if prefix else self._overall_mean
             wd_by_day: list[list[float]] = [[] for _ in range(7)]
-            for d, p in zip(prefix_dates, prefix_prices, strict=False):
+            for d, p in zip(prefix_dates, prefix, strict=False):
                 wd_by_day[d.weekday()].append(p)
             wd_means = [mean(xs) if xs else overall for xs in wd_by_day]
             wd_h = wd_means[dates[h].weekday()]
@@ -738,7 +661,9 @@ class FuelPricePredictor:
 
     # ---- internal: empty metrics for the bottom two tiers -----------------
     @staticmethod
-    def _empty_metrics(n_train: int, n_hikes: int, cycle_len: int, model_kind: str) -> dict:
+    def _empty_metrics(
+        n_train: int, n_hikes: int, cycle_len: int, model_kind: str, trained_at: str | None = None
+    ) -> dict:
         return {
             "mae": None,
             "mape_pct": None,
@@ -752,4 +677,5 @@ class FuelPricePredictor:
             "n_hikes": n_hikes,
             "model_kind": model_kind,
             "beats_baseline": None,
+            "trained_at": trained_at,
         }

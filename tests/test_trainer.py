@@ -32,9 +32,8 @@ def test_save_then_load_roundtrips(monkeypatch, tmp_path) -> None:
 
     loaded = load_model(artifact)
     assert loaded is not None
-    # The average-baseline predictor exposed _overall_mean; the cycle-aware
-    # HGBR model does not. Assert the round-trip via the still-stable public
-    # contract: the loaded predictor is fitted and reports the same model_kind.
+    # Assert the round-trip via the public contract: the loaded predictor is
+    # fitted and reports the same model_kind.
     assert loaded._fitted  # noqa: SLF001
     assert (
         loaded.train_metrics is not None
@@ -86,24 +85,26 @@ def test_load_model_corrupt_bytes_returns_none(tmp_path) -> None:
     assert load_model(artifact) is None
 
 
-# --- Artifact v2: sklearn-version guard + executor-offloaded fit --------------
+# --- Artifact v3: pure-fade numpy model + executor-offloaded fit --------------
 
 
 def _series_for_fit() -> dict:
-    """40 days of a 7-day sawtooth -> ridge_degraded tier (sklearn path)."""
-    return {date(2026, 1, 1) + timedelta(days=i): 180.0 + (i % 7) for i in range(40)}
+    """40 days of a 7-day descending sawtooth -> fade tier (>=3 hikes)."""
+    week = [180.0, 178.0, 176.0, 174.0, 172.0, 170.0, 168.0]
+    return {date(2026, 1, 1) + timedelta(days=i): week[i % 7] for i in range(40)}
 
 
-def test_save_load_version_2_roundtrips(tmp_path) -> None:
+def test_save_load_version_3_roundtrips(tmp_path) -> None:
     predictor = fit_predictor(_series_for_fit())
     assert predictor._fitted  # noqa: SLF001
+    assert predictor._model_kind == "fade"  # noqa: SLF001
 
     artifact = save_model(predictor, tmp_path)
-    # Raw artifact shape: v2 dict with sklearn_version + model_kind.
+    # Raw artifact shape: v3 dict with model_kind (NO sklearn_version).
     with artifact.open("rb") as fh:
         raw = pickle.load(fh)
-    assert raw["version"] == 2
-    assert raw["sklearn_version"] is not None
+    assert raw["version"] == 3
+    assert "sklearn_version" not in raw
     assert raw["model_kind"] == predictor._model_kind  # noqa: SLF001
 
     loaded = load_model(artifact)
@@ -119,11 +120,9 @@ def test_load_rejects_version_1_artifact(tmp_path) -> None:
     assert load_model(artifact) is None
 
 
-def test_load_rejects_sklearn_version_drift(tmp_path) -> None:
-    try:
-        import sklearn  # noqa: F401
-    except ImportError:
-        pytest.skip("sklearn not importable on this environment")
+def test_load_rejects_version_2_artifact(tmp_path) -> None:
+    """v2 artifacts held a sklearn GBM that can't unpickle without sklearn —
+    the coordinator must retrain rather than crash. load_model returns None."""
     predictor = fit_predictor(_series_for_fit())
     artifact = tmp_path / MODEL_FILENAME
     artifact.write_bytes(
@@ -131,8 +130,8 @@ def test_load_rejects_sklearn_version_drift(tmp_path) -> None:
             {
                 "version": 2,
                 "predictor": predictor,
-                "sklearn_version": "0.0.0",
-                "model_kind": "ridge_degraded",
+                "sklearn_version": "1.4.0",
+                "model_kind": "histgbr",
             }
         )
     )

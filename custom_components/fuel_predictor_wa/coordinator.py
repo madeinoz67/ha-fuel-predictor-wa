@@ -140,7 +140,7 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         if not self.predictor._fitted and not self._train_in_progress:  # noqa: SLF001
             self.hass.async_create_task(self._async_train_background())
 
-        # sklearn predict is CPU-bound -> run it off the event loop.
+        # predict is CPU-bound (pure numpy) -> run it off the event loop.
         points = await self.hass.async_add_executor_job(
             self.predictor.predict, today_date, self.horizon, known
         )

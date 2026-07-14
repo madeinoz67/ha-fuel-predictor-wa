@@ -51,9 +51,9 @@ def main() -> None:
         predictor = FuelPricePredictor()
         predictor.fit(series)
         # Each product gets its own subdir: save_model writes a fixed
-        # MODEL_FILENAME inside it, so the v2 artifact shape (version +
-        # predictor + sklearn_version + model_kind) is produced uniformly
-        # with the live integration's load_model path.
+        # MODEL_FILENAME inside it, so the v3 artifact shape (version +
+        # predictor + model_kind) is produced uniformly with the live
+        # integration's load_model path.
         product_dir = out_dir / f"product_{product}"
         artifact = save_model(predictor, product_dir)
         print(f"trained product {product}: {len(series)} rows -> {artifact}")

@@ -15,7 +15,7 @@ from .predictor import FuelPricePredictor
 
 _LOGGER = logging.getLogger(__name__)
 
-MODEL_VERSION = 2
+MODEL_VERSION = 3
 
 # fetch_month(year, month) -> normalized records (already product-filtered).
 MonthFetcher = Callable[[int, int], Awaitable[list[dict[str, Any]]]]
@@ -24,19 +24,6 @@ MonthFetcher = Callable[[int, int], Awaitable[list[dict[str, Any]]]]
 # so the CPU-bound fit can run off the HA event loop; the default just runs
 # the fn inline so tests without HA still work.
 Executor = Callable[..., Awaitable[Any]]
-
-
-def _get_sklearn_version() -> str | None:
-    """Return the installed sklearn version, or None if sklearn is absent.
-
-    sklearn is imported lazily by predictor.fit(); on an unfitted predictor
-    (or a fresh interpreter without sklearn) the import must be guarded.
-    """
-    try:
-        import sklearn  # noqa: PLC0415 — lazy on purpose
-    except ImportError:
-        return None
-    return getattr(sklearn, "__version__", None)
 
 
 async def _default_executor(fn: Callable[..., Any], *args: Any) -> Any:
@@ -71,7 +58,6 @@ def save_model(predictor: FuelPricePredictor, storage_dir: Path) -> Path:
     payload = {
         "version": MODEL_VERSION,
         "predictor": predictor,
-        "sklearn_version": _get_sklearn_version(),
         "model_kind": getattr(predictor, "_model_kind", None),
     }
     with artifact.open("wb") as fh:
@@ -80,6 +66,13 @@ def save_model(predictor: FuelPricePredictor, storage_dir: Path) -> Path:
 
 
 def load_model(artifact: Path) -> FuelPricePredictor | None:
+    """Load a v3 model artifact, or None if absent/corrupt/wrong-version.
+
+    v2/v1 artifacts held a third-party ML regressor that can't unpickle without
+    its ML dependency (which no longer installs on HA's Python 3.14 — no
+    prebuilt wheel, source build fails). Returning None forces the coordinator
+    to retrain under the running interpreter.
+    """
     if not artifact.exists():
         return None
     try:
@@ -90,22 +83,9 @@ def load_model(artifact: Path) -> FuelPricePredictor | None:
         return None
     if not isinstance(data, dict) or data.get("version") != MODEL_VERSION:
         _LOGGER.warning(
-            "Model artifact version mismatch: %s",
+            "Model artifact version mismatch (expected %s): %s",
+            MODEL_VERSION,
             data.get("version") if isinstance(data, dict) else type(data),
-        )
-        return None
-    # sklearn pickles are not portable across versions — if the artifact was
-    # written under a different sklearn than the one currently installed, reject
-    # so the coordinator retrains under the running interpreter. When either
-    # side is unknown (no sklearn at save time, or no sklearn now) we cannot
-    # compare and let it through.
-    artifact_sk = data.get("sklearn_version")
-    installed_sk = _get_sklearn_version()
-    if artifact_sk is not None and installed_sk is not None and artifact_sk != installed_sk:
-        _LOGGER.warning(
-            "Model artifact sklearn version drift: artifact=%s installed=%s — retraining",
-            artifact_sk,
-            installed_sk,
         )
         return None
     return data.get("predictor")

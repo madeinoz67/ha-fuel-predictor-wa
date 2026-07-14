@@ -24,7 +24,7 @@ _FULL = {
     "improvement_pct": 32.0,
     "post_hike_mae": 4.1,
     "normal_mae": 3.0,
-    "model_kind": "histgbr",
+    "model_kind": "fade",
     "cycle_len_days": 7,
     "n_hikes": 12,
     "beats_baseline": True,

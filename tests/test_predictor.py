@@ -91,13 +91,15 @@ def test_offset_calibration_pins_level_to_known_anchor() -> None:
     """
     predictor = FuelPricePredictor()
     # ~90 days of essentially flat history at 160 (tiny weekday wiggle so the
-    # HGBR has *some* signal but the recent mean is unambiguously ~160).
+    # model has *some* signal but the recent mean is unambiguously ~160). No
+    # cycle -> weekday_mean tier (the pure-fade model needs >=3 hikes to fade
+    # on); the offset-calibration pin must hold for BOTH tiers.
     history = {(date(2026, 4, 1) + timedelta(days=i)): 160.0 + (i % 7) * 0.1 for i in range(90)}
     predictor.fit(history)
     assert predictor._fitted  # noqa: SLF001
     assert predictor.train_metrics is not None
     # Sanity: the training history really is anchored near 160.
-    assert predictor.train_metrics["baseline_mae"] < 5.0
+    assert abs(predictor._recent_mean - 160.0) < 1.0  # noqa: SLF001
 
     # A 20c hike just happened: today's known price is 180.
     known = {START: 180.0}
@@ -141,7 +143,7 @@ def test_empirical_fade_makes_forecast_curve_discriminate_cheapest_day() -> None
     predictor.fit(history)
     assert predictor._fitted  # noqa: SLF001
     assert predictor.train_metrics is not None
-    assert predictor.train_metrics["model_kind"] == "histgbr"
+    assert predictor.train_metrics["model_kind"] == "fade"
     # Fade curve must be populated and carry the cycle shape.
     assert predictor._fade_curve, "fade curve not populated for histgbr tier"  # noqa: SLF001
     fade_spread = max(predictor._fade_curve.values()) - min(  # noqa: SLF001
@@ -230,14 +232,19 @@ def test_degradation_weekday_mean_under_14_days() -> None:
     assert all(p.price_cpl >= 0 for p in forecast)
 
 
-def test_degradation_ridge_under_35_days() -> None:
-    """14 <= n < 35 (or too few hikes) -> ridge_degraded tier."""
+def test_degradation_weekday_mean_when_too_few_hikes() -> None:
+    """>=14 days but <3 hikes -> weekday_mean tier (no cycle signal to fade on).
+
+    The old ridge_degraded (sklearn Ridge) tier is gone — sklearn can't install
+    on HA's Python 3.14. Without a cycle signal (>=3 hikes), the pure-fade model
+    has nothing to fade on, so it falls back to the numpy weekday_mean tier.
+    """
     predictor = FuelPricePredictor()
     # 20 days, no clear cycle (so <3 hikes).
     history = {date(2026, 6, 1) + timedelta(days=i): 170.0 + (i % 3) * 0.3 for i in range(20)}
     predictor.fit(history)
     assert predictor.train_metrics is not None
-    assert predictor.train_metrics["model_kind"] == "ridge_degraded"
+    assert predictor.train_metrics["model_kind"] == "weekday_mean"
 
     points = predictor.predict(START, 7)
     forecast = [p for p in points if p.source == "forecast"]
@@ -288,7 +295,7 @@ def test_predict_never_returns_negative() -> None:
 
 def test_train_metrics_populated() -> None:
     """After fit on >=35 days with hikes, train_metrics is fully populated
-    and model_kind == histgbr."""
+    and model_kind == fade (the pure-fade production model)."""
     predictor = FuelPricePredictor()
     # 70 days of a clean weekly cycle -> >=3 hikes, n >= 35.
     week = [180.0, 178.0, 176.0, 174.0, 172.0, 170.0, 168.0]
@@ -297,7 +304,7 @@ def test_train_metrics_populated() -> None:
 
     m = predictor.train_metrics
     assert m is not None
-    assert m["model_kind"] == "histgbr"
+    assert m["model_kind"] == "fade"
     for key in (
         "mae",
         "baseline_mae",
@@ -320,93 +327,79 @@ def test_train_metrics_populated() -> None:
 def test_walkforward_mape_pairs_actual_with_own_error() -> None:
     """The walk-forward MAPE must pair each error with its OWN actual.
 
-    Regression: previously the MAPE list-comprehension zipped a weakly-guarded
-    actuals list (``h in t_to_row``) against the strictly-guarded errors list
-    (full guard chain: h >= MIN_LEVEL_WINDOW+2, anchor in range, train prefix
-    long enough, fit succeeded). When a hold day was skipped, the two lists
-    had different lengths AND different day-identities, so ``zip(...,
-    strict=False)`` silently paired ``error[i]`` with ``actual[j]`` for
-    different days. The formula also treated the error magnitude as if it
-    were a prediction. The result was a silently-wrong ``mape_pct``.
+    Regression: the MAPE list-comprehension once zipped a weakly-guarded
+    actuals list against the strictly-guarded errors list (full guard chain:
+    prefix long enough, >=3 hikes on the prefix, fade curve non-empty). When a
+    hold day was skipped, the two lists had different lengths AND different
+    day-identities, so ``zip(..., strict=False)`` silently paired
+    ``error[i]`` with ``actual[j]`` for different days. The result was a
+    silently-wrong ``mape_pct``.
 
-    This test forces a skip (short train prefix on the earliest hold day) and
+    This test forces a skip (early hold days whose prefix has <3 hikes) and
     checks internal consistency: ``mape_pct`` == ``mean(err_i / actual_i)``
-    over the PREDICTED hold days only. A stub regressor makes the predictions
-    exactly knowable, so the oracle is fully deterministic.
+    over the PREDICTED hold days only. The pure-fade forecast is fully
+    deterministic (no stub regressor needed), so the oracle is exact.
     """
+    from custom_components.fuel_predictor_wa.predictor import cycle_pos_at
+
     predictor = FuelPricePredictor()
-    # n = 18 -> hold = min(28, 18//5) = 3, step = 1, hold_indices = [15, 16, 17].
-    # h = 15: anchor_t = 13, train rows (rows_t < 13) = 7..12 = 6 rows
-    #         < MIN_LEVEL_WINDOW (7) -> SKIPPED.
-    # h = 16: anchor_t = 14, train rows = 7..13 = 7 rows -> predicted.
-    # h = 17: anchor_t = 15, train rows = 7..14 = 8 rows -> predicted.
-    # So exactly one hold day is skipped -> the bug would mispair errors.
-    n = 18
-    week = [170.0, 169.0, 168.0, 167.0, 168.0, 169.0, 170.0]
+    # n = 26, 7-day descending sawtooth -> +12 hike at every cycle boundary.
+    # Full-series hikes land at indices 7, 14, 21.
+    # hold = min(28, 26//5) = 5, step = 1, hold_indices = [21, 22, 23, 24, 25].
+    # For each h, prefix = series[:h-2]; need >=3 hikes IN THE PREFIX:
+    #   h=21: prefix=0..18 -> hikes {7,14}     = 2 -> SKIPPED
+    #   h=22: prefix=0..19 -> hikes {7,14}     = 2 -> SKIPPED
+    #   h=23: prefix=0..20 -> hikes {7,14}     = 2 -> SKIPPED
+    #   h=24: prefix=0..21 -> hikes {7,14,21}  = 3 -> predicted
+    #   h=25: prefix=0..22 -> hikes {7,14,21}  = 3 -> predicted
+    # So three hold days are skipped -> the bug would mispair errors.
+    n = 26
+    week = [180.0, 178.0, 176.0, 174.0, 172.0, 170.0, 168.0]
     series = [week[i % 7] for i in range(n)]
     base = date(2026, 5, 1)
     dates = [base + timedelta(days=i) for i in range(n)]
-    # fit() populates the instance state _walk_forward reads (min28/max28/
-    # overall_mean) and selects the ridge_degraded tier for n=18.
+    # fit() populates instance state (min28/max28) + selects the fade tier.
     predictor.fit(dict(zip(dates, series, strict=True)))
-
-    # Rebuild the feature matrix exactly as fit() does.
-    hikes = detect_hikes(series)
-    L = median_cycle_len(hikes)
-    rows_t = list(range(MIN_LEVEL_WINDOW, n))
-    X = np.asarray(
-        [build_row_features(series, t, hikes, L, weekday=dates[t].weekday()) for t in rows_t],
-        dtype=float,
-    )
-    y = np.asarray([series[t] for t in rows_t], dtype=float)
-    feature_cols = [1, 2]  # ridge_degraded tier
-
-    # Stub regressor: predicts a constant. With offset calibration,
-    # pred_h = clamp(PRED + (series[h-2] - PRED)) = clamp(series[h-2]).
-    PRED_VALUE = 169.0
-
-    class _StubReg:
-        def fit(self, X_train, y_train) -> None:  # noqa: ANN001, ARG002
-            pass
-
-        def predict(self, X_rows):  # noqa: ANN001
-            return np.full((len(X_rows),), PRED_VALUE, dtype=float)
-
-    def factory() -> _StubReg:
-        return _StubReg()
 
     metrics = predictor._walk_forward(  # noqa: SLF001
         series=series,
         dates=dates,
-        rows_t=rows_t,
-        X=X,
-        y=y,
-        feature_cols=feature_cols,
-        factory=factory,
-        hold=3,
-        hikes=hikes,
+        hold=5,
     )
 
     # The walk-forward ran and at least one day was predicted.
     assert metrics["n_holdout"] >= 1, "expected at least one predicted hold day"
     assert metrics["mape_pct"] is not None
 
-    # Oracle: walk the SAME guards and compute (actual, abs_err) for each
+    # Oracle: walk the SAME guards and compute the pure-fade forecast for each
     # PREDICTED hold day, then MAPE = mean(err / max(|actual|, 1e-6)) * 100.
-    t_to_row = {t: i for i, t in enumerate(rows_t)}
-    hold_indices = list(range(n - 3, n))
+    hold_indices = list(range(n - 5, n))
     lo_clamp = CLAMP_LO * min(series)
     hi_clamp = CLAMP_HI * max(series)
     pairs: list[tuple[float, float]] = []
     for h in hold_indices:
-        if h < MIN_LEVEL_WINDOW + 2 or (h - 2) not in t_to_row or h not in t_to_row:
-            continue
         anchor_t = h - 2
-        train_idx = [i for i, t in enumerate(rows_t) if t < anchor_t]
-        if len(train_idx) < MIN_LEVEL_WINDOW:
+        prefix_end = anchor_t
+        if prefix_end < MIN_LEVEL_WINDOW + 2:
             continue
+        prefix = series[:prefix_end]
+        hikes_p = detect_hikes(prefix)
+        if len(hikes_p) < 3:
+            continue
+        L_p = median_cycle_len(hikes_p)
+        by_cp: dict[int, list[float]] = {}
+        for i, p in enumerate(prefix):
+            by_cp.setdefault(cycle_pos_at(i, hikes_p) % L_p, []).append(p)
+        fade_p = {cp: float(np.mean(ps)) for cp, ps in by_cp.items()}
+        fade_mean_p = float(np.mean(list(fade_p.values())))
+        anchor_price = series[anchor_t]
+        anchor_cp = cycle_pos_at(anchor_t, hikes_p) % L_p
+        target_cp = cycle_pos_at(h, hikes_p) % L_p
+        pred = anchor_price + (
+            fade_p.get(target_cp, fade_mean_p) - fade_p.get(anchor_cp, fade_mean_p)
+        )
+        pred = max(lo_clamp, min(hi_clamp, pred))
         actual = series[h]
-        pred = max(lo_clamp, min(hi_clamp, float(series[anchor_t])))
         pairs.append((actual, abs(actual - pred)))
 
     # Sanity: the skip really happened (fewer pairs than hold days).
