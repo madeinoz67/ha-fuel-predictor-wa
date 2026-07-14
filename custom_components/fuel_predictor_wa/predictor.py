@@ -441,7 +441,9 @@ class FuelPricePredictor:
         if not self._fitted or self._last_fit_date is None or self._L <= 0:
             return {}
         elapsed = max(0, (anchor_date - self._last_fit_date).days)
-        dsh = self._days_since_hike_at_fit + elapsed
+        # getattr: models pickled before this attribute existed (older versions)
+        # deserialize without it — degrade to "just hiked at fit" rather than raise.
+        dsh = getattr(self, "_days_since_hike_at_fit", 0) + elapsed
         cp = dsh % self._L
         return {
             "cycle_pos": cp,

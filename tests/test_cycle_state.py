@@ -51,3 +51,22 @@ def test_cycle_state_advances_and_wraps_with_elapsed_days() -> None:
     assert cs["cycle_pos"] == 0
     assert cs["days_since_last_hike"] == 7
     assert cs["expected_next_hike_in_days"] == 7
+
+
+def test_cycle_state_tolerates_old_pickle_missing_attr() -> None:
+    """A model pickled before this attribute existed deserializes without it.
+
+    cycle_state must degrade gracefully (assume "just hiked at fit") rather than
+    raise AttributeError — a raise here kills the cheapest_day entity on reload.
+    This is the v0.2.4 regression: a v0.2.3-trained model.pkl loaded by v0.2.4.
+    """
+    pred = FuelPricePredictor()
+    pred.fit(_weekly_series(date(2026, 1, 1), cycles=3))
+    del pred._days_since_hike_at_fit  # simulate the pre-v0.2.4 pickle
+    pred._last_fit_date = date(2026, 1, 21)
+    pred._L = 7
+    pred._fitted = True
+    cs = pred.cycle_state(date(2026, 1, 23))  # 2 days elapsed since fit
+    assert cs["cycle_len_days"] == 7
+    assert cs["days_since_last_hike"] == 2  # getattr default 0 + 2 elapsed
+    assert cs["cycle_pos"] == 2

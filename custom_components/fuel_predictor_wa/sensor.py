@@ -90,11 +90,15 @@ class CheapestDaySensor(_FuelPredictorEntity):
             ],
         }
         # Live cycle position: where are we in the price-hike cycle today.
+        # Best-effort — a diagnostic attribute must never break the primary entity.
         predictor = getattr(self.coordinator, "predictor", None)
         if predictor is not None and result.points:
-            cycle = predictor.cycle_state(result.points[0].day)
-            if cycle:
-                attrs.update(cycle)
+            try:
+                cycle = predictor.cycle_state(result.points[0].day)
+                if cycle:
+                    attrs.update(cycle)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("cycle_state unavailable; skipping cycle attributes")
         return attrs
 
 
