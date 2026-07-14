@@ -48,12 +48,14 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(minutes=UPDATE_INTERVAL_MINUTES),
         )
         self.entry = entry
-        data = entry.data
-        self.product: int = data[CONF_PRODUCT]
-        self.suburb: str = data[CONF_SUBURB]
-        self.surrounding: bool = data.get(CONF_SURROUNDING, DEFAULT_SURROUNDING)
-        self.horizon: int = data.get(CONF_FORECAST_HORIZON_DAYS, DEFAULT_FORECAST_HORIZON_DAYS)
-        self.station_limit: int = data.get(CONF_STATION_LIMIT, DEFAULT_STATION_LIMIT)
+        # Options override data — changes in the options flow (e.g. horizon,
+        # product) must take effect on reload. getattr for robustness.
+        cfg = {**entry.data, **getattr(entry, "options", {})}
+        self.product: int = cfg[CONF_PRODUCT]
+        self.suburb: str = cfg[CONF_SUBURB]
+        self.surrounding: bool = cfg.get(CONF_SURROUNDING, DEFAULT_SURROUNDING)
+        self.horizon: int = cfg.get(CONF_FORECAST_HORIZON_DAYS, DEFAULT_FORECAST_HORIZON_DAYS)
+        self.station_limit: int = cfg.get(CONF_STATION_LIMIT, DEFAULT_STATION_LIMIT)
 
         self.client = FuelWatchClient(hass)
         self.predictor = FuelPricePredictor()
