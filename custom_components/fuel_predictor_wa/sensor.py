@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import logging
 from typing import Any
 
@@ -75,7 +76,12 @@ class CheapestDaySensor(_FuelPredictorEntity):
             "cheapest_date": result.cheapest_day.day.isoformat(),
             "cheapest_source": result.cheapest_day.source,
             "horizon": [
-                {"date": p.day.isoformat(), "price": p.price_cpl, "source": p.source}
+                {
+                    "date": p.day.isoformat(),
+                    "ts": calendar.timegm(p.day.timetuple()) * 1000,
+                    "price": p.price_cpl,
+                    "source": p.source,
+                }
                 for p in result.points
             ],
         }
