@@ -14,9 +14,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, UNIT_CENTS_PER_LITRE
 from .coordinator import FuelPredictorDataUpdateCoordinator
-from .predictor import ForecastResult
+from .predictor import DayForecast, ForecastResult
 
 _LOGGER = logging.getLogger(__name__)
+
+MAX_FORECAST_ENTITIES = 14
 
 
 async def async_setup_entry(
@@ -26,14 +28,15 @@ async def async_setup_entry(
 ) -> None:
     """Set up Fuel Predictor WA sensors."""
     coordinator: FuelPredictorDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            CheapestDaySensor(coordinator, entry),
-            CheapestStationTodaySensor(coordinator, entry),
-            StatusSensor(coordinator, entry),
-            ModelFitSensor(coordinator, entry),
-        ]
-    )
+    entities: list[SensorEntity] = [
+        CheapestDaySensor(coordinator, entry),
+        CheapestStationTodaySensor(coordinator, entry),
+        StatusSensor(coordinator, entry),
+        ModelFitSensor(coordinator, entry),
+    ]
+    for day in range(1, MAX_FORECAST_ENTITIES + 1):
+        entities.append(ForecastDaySensor(coordinator, entry, day))
+    async_add_entities(entities)
 
 
 class _FuelPredictorEntity(CoordinatorEntity[FuelPredictorDataUpdateCoordinator], SensorEntity):
@@ -128,7 +131,6 @@ class StatusSensor(_FuelPredictorEntity):
     _attr_key = "status"
     _attr_name = "Training status"
     _attr_icon = "mdi:brain"
-    # A string state must not be MEASUREMENT (HA logs a repair issue otherwise).
     _attr_state_class = None
 
     @property
@@ -137,14 +139,7 @@ class StatusSensor(_FuelPredictorEntity):
 
 
 class ModelFitSensor(_FuelPredictorEntity):
-    """Holdout goodness-of-fit metrics for the fitted predictor.
-
-    State is the holdout MAE in c/L (rounded to 2 dp) — the same unit as the
-    forecast sensors, so the deviation is directly comparable to a predicted
-    price. ``unknown`` pre-training or on the bottom tiers where no honest
-    holdout is computable. Attributes expose the rest of ``train_metrics``,
-    dropping any key whose value is None (low-tier models have several).
-    """
+    """Holdout goodness-of-fit metrics for the fitted predictor."""
 
     _attr_key = "model_fit"
     _attr_name = "Model fit"
@@ -162,11 +157,51 @@ class ModelFitSensor(_FuelPredictorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         metrics = self._metrics
-        # mae is the native value; don't duplicate it in attrs.
         return {k: v for k, v in metrics.items() if k != "mae" and v is not None}
 
     @property
     def _metrics(self) -> dict[str, Any]:
-        """Read train_metrics defensively — may be absent pre-fit / on stubs."""
         predictor = getattr(self.coordinator, "predictor", None)
         return getattr(predictor, "train_metrics", None) or {}
+
+
+class ForecastDaySensor(_FuelPredictorEntity):
+    """One day of the forecast horizon as a discrete entity.
+
+    Enables reliable entity-based graphing (apexcharts/mini-graph/history-graph)
+    without data_generator — other cards can plot these directly.
+    """
+
+    _attr_native_unit_of_measurement = UNIT_CENTS_PER_LITRE
+    _attr_icon = "mdi:gas-station"
+
+    def __init__(
+        self,
+        coordinator: FuelPredictorDataUpdateCoordinator,
+        entry: ConfigEntry,
+        day: int,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._day = day
+        self._attr_unique_id = f"{entry.entry_id}_day_{day}"
+        self._attr_name = f"Day {day}"
+
+    def _point(self) -> DayForecast | None:
+        result = self._data.get("forecast")
+        if not result or self._day > len(result.points):
+            return None
+        return result.points[self._day - 1]
+
+    @property
+    def native_value(self) -> float | None:
+        p = self._point()
+        if p and p.price_cpl is not None:
+            return round(p.price_cpl, 1)
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        p = self._point()
+        if not p:
+            return {}
+        return {"date": p.day.isoformat(), "source": p.source}
