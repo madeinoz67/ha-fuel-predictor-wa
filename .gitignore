@@ -47,3 +47,6 @@ docs/superpowers/
 
 # Local Claude Code project guidance (kept local, not published)
 CLAUDE.md
+
+# Interceptor verify screenshots (ephemeral)
+interceptor-screenshot-*.png
