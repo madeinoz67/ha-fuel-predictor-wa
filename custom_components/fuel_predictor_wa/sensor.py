@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import calendar
 import logging
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
@@ -19,6 +21,11 @@ from .predictor import DayForecast, ForecastResult
 _LOGGER = logging.getLogger(__name__)
 
 MAX_FORECAST_ENTITIES = 14
+
+# AWST (Australia/Perth). FuelWatch prices are fixed per AWST day and WA keeps
+# no DST, so this is permanently UTC+8. Anchors the horizon `time` attribute to
+# a stable local-midnight axis for apexcharts regardless of the HA tz setting.
+AWST = ZoneInfo("Australia/Perth")
 
 
 async def async_setup_entry(
@@ -81,6 +88,8 @@ class CheapestDaySensor(_FuelPredictorEntity):
             "cheapest_source": result.cheapest_day.source,
             "horizon": [
                 {
+                    "time": datetime.combine(p.day, datetime.min.time(), tzinfo=AWST).isoformat(),
+                    "value": p.price_cpl,
                     "date": p.day.isoformat(),
                     "ts": calendar.timegm(p.day.timetuple()) * 1000,
                     "price": p.price_cpl,

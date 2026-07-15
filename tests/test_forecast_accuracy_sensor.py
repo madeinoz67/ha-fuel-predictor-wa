@@ -126,3 +126,29 @@ def test_cheapest_day_attrs_without_cycle_state() -> None:
 def test_cheapest_day_attrs_empty_when_no_forecast() -> None:
     sensor = _cheapest_sensor(None, _PredictorStub({"cycle_pos": 1}))
     assert sensor.extra_state_attributes == {}
+
+
+def test_cheapest_day_horizon_has_forecast_shape_keys() -> None:
+    """horizon points carry power_predictor_24h-style time/value for apexcharts."""
+    sensor = _cheapest_sensor(_result([176.3, 173.7, 171.0]), _PredictorStub({}))
+    first = sensor.extra_state_attributes["horizon"][0]
+    # Drop-in shape for a power_predictor_24h-style data_generator.
+    assert "time" in first
+    assert "value" in first
+    assert first["value"] == 176.3
+    # Rich fields preserved (additive change — nothing renamed/removed).
+    assert first["date"] == "2026-07-14"
+    assert first["price"] == 176.3
+    assert first["source"] == "forecast"
+
+
+def test_cheapest_day_horizon_time_is_awst_midnight() -> None:
+    """time is ISO8601 at AWST midnight (+08:00), independent of HA tz config."""
+    from datetime import datetime, timedelta
+
+    sensor = _cheapest_sensor(_result([176.3]), _PredictorStub({}))
+    first = sensor.extra_state_attributes["horizon"][0]
+    assert first["time"] == "2026-07-14T00:00:00+08:00"
+    parsed = datetime.fromisoformat(first["time"])
+    assert parsed.utcoffset() == timedelta(hours=8)
+    assert parsed.date() == date(2026, 7, 14)
