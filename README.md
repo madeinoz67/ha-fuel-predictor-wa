@@ -89,9 +89,10 @@ status` sensor shows `untrained → training → ready`. Live today/tomorrow
 sensors work immediately. Call the `fuel_predictor_wa.retrain` service to
 refresh on demand.
 
-The model retrains periodically (every ~30 days) and refits daily at **15:00
-AWST** — 30 minutes after FuelWatch publishes tomorrow's prices — so it always
-trains on the freshest data.
+The model refits **daily** — a 15:00 AWST scheduled refit (shortly after
+FuelWatch publishes tomorrow's prices) plus a 24h staleness gate checked each
+poll — and can be retrained on demand via the `fuel_predictor_wa.retrain`
+service.
 
 ## Charting — ApexCharts example
 
@@ -175,17 +176,28 @@ band reads `sensor.model_fit` live and widens/narrows as the MAE updates.
 ## Architecture
 
 ```
-ON-INSTALL (HA background task)         OFFLINE (optional, dev machine)
- FuelWatch blob store (24 monthly CSVs)   data.wa.gov.au (24yr bulk CSV)
-        │                                           │
-   historic_client ──► trainer ──► model.pkl   tools/train.py ──► model.pkl
-        │                                              (pre-seed alternative)
-   catchment.py (local suburb set, min_stations gate)
-        │
-FuelWatch API (today/tmrw) ──► coordinator ──► predictor ──► sensors
-                                  ▲                    │
-                  history.py (daily append)      forecast_ledger (accuracy)
-                  15:00 AWST refit
+ON-INSTALL (config flow + setup_entry)        OFFLINE (dev machine; pre-seed only)
+  geocode.py → anchor suburb (HA lat/lon)     tools/download_history.py (data.wa.gov.au)
+  load model.pkl if present                   tools/train.py → model.pkl
+  first refresh → cold-start train if unfitted
+  schedule 15:00 AWST refit
+  register fuel_predictor_wa.retrain
+
+RUNTIME — coordinator poll loop (twice daily)
+  FuelWatch API (today/tmrw) ── known{today,tomorrow} ──┐
+                                                          ▼
+  coordinator ──► predictor.predict ──► sensors
+    │            (pure-fade + TGP drift)   (cheapest_day, cheapest_station_today,
+    │                                      Day 1–14, model_fit, forecast_accuracy)
+    └─► forecast_ledger (snapshot + actual → accuracy, each poll)
+
+  Training is fire-and-forget — predict never waits. Three triggers → _async_train_background:
+    15:00 AWST schedule · 24h _should_refit gate · fuel_predictor_wa.retrain service
+
+  Azure Blob (FuelWatch): 24mo retail CSVs + 3yr wholesale TGP ─► historic_client ─┐
+  catchment.py: suburb set, min_stations gate (lazy, disk-cached) ─────────────────┤
+                                                                                    ▼
+                                          trainer.assemble_and_train ──► model.pkl
 ```
 
 - **Forecaster**: cycle-aware empirical-fade curve anchored to the live known
