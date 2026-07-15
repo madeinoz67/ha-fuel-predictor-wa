@@ -26,6 +26,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = FuelPredictorDataUpdateCoordinator(hass, entry)
     await coordinator.async_load_model()
     await coordinator.async_config_entry_first_refresh()
+    coordinator.setup_schedule()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -45,5 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unloaded := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
+        coord = hass.data[DOMAIN].pop(entry.entry_id, None)
+        if coord is not None:
+            coord.cancel_schedule()
     return unloaded

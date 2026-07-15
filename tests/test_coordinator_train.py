@@ -136,6 +136,32 @@ async def test_predict_runs_in_executor(hass, tmp_path, monkeypatch) -> None:
     await coord.async_shutdown()
 
 
+@pytest.mark.asyncio
+async def test_setup_and_cancel_schedule(hass, tmp_path, monkeypatch) -> None:
+    """The daily post-publication schedule registers + cleans up."""
+    hass.config.config_dir = str(tmp_path)
+    monkeypatch.setattr(
+        "custom_components.fuel_predictor_wa.fuelwatch.async_get_clientsession",
+        lambda _hass: None,
+    )
+
+    class _Entry:
+        entry_id = "test-sched"
+        unique_id = "fuel_predictor_wa_sched"
+        data = _entry_data()
+
+    coord = FuelPredictorDataUpdateCoordinator(hass, _Entry())
+    assert coord._cancel_schedule is None  # noqa: SLF001
+    coord.setup_schedule()
+    assert coord._cancel_schedule is not None  # noqa: SLF001
+    # Idempotent: a second setup does not replace the listener.
+    first = coord._cancel_schedule  # noqa: SLF001
+    coord.setup_schedule()
+    assert coord._cancel_schedule is first  # noqa: SLF001
+    coord.cancel_schedule()
+    assert coord._cancel_schedule is None  # noqa: SLF001
+
+
 class _StubClient:
     """Replaces FuelWatchClient so no live HTTP happens during the test."""
 

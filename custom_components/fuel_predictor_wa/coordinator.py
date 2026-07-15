@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import forecast_ledger
@@ -31,6 +33,8 @@ from .const import (
     DEFAULT_SURROUNDING,
     DOMAIN,
     MODEL_FILENAME,
+    POST_PUBLICATION_REFRESH_HOUR,
+    POST_PUBLICATION_REFRESH_MINUTE,
     PRODUCT_CSV_DESCRIPTION,
     RETRAIN_INTERVAL_HOURS,
     STATUS_ERROR,
@@ -87,6 +91,8 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         # Resolved local catchment ( suburb set + metadata ) or None for WA-wide.
         # Lazy-resolved on first train; cached on disk keyed by config.
         self.catchment: dict | None = None
+        # Wall-clock schedule for the daily post-publication fetch+refit.
+        self._cancel_schedule: Callable[[], None] | None = None
         # Model loading is deferred to async_load_model() so the (blocking) file
         # read runs in the executor, never on the event loop.
 
@@ -103,6 +109,37 @@ class FuelPredictorDataUpdateCoordinator(DataUpdateCoordinator):
         if loaded is not None:
             self.predictor = loaded
             self.status = STATUS_READY
+
+    # --- daily post-publication schedule --------------------------------
+    def setup_schedule(self) -> None:
+        """Register a daily fetch+refit shortly after FuelWatch publishes
+        tomorrow's prices (~14:30 AWST).
+
+        Wall-clock-locked (via ``async_track_time_change``) so it doesn't drift
+        with the 12h poll interval. The 24h ``_should_refit`` gate remains as a
+        fallback if this scheduled fire is missed (e.g. HA was down at 15:00).
+        """
+        if self._cancel_schedule is not None:
+            return
+        self._cancel_schedule = async_track_time_change(
+            self.hass,
+            self._async_on_scheduled_refresh,
+            hour=POST_PUBLICATION_REFRESH_HOUR,
+            minute=POST_PUBLICATION_REFRESH_MINUTE,
+        )
+
+    def cancel_schedule(self) -> None:
+        """Cancel the daily schedule (called on unload)."""
+        if self._cancel_schedule is not None:
+            self._cancel_schedule()
+            self._cancel_schedule = None
+
+    async def _async_on_scheduled_refresh(self, *_args) -> None:
+        """Fetch fresh (post-14:30) prices, then refit on the freshest bulk history."""
+        _LOGGER.info("FuelWatch post-publication refresh + refit")
+        await self.async_request_refresh()
+        if not self._train_in_progress:
+            self.hass.async_create_task(self._async_train_background(retrain=True))
 
     # --- catchment + refit cadence --------------------------------------
     async def _async_resolve_catchment(self) -> dict | None:

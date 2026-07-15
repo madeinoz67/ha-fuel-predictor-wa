@@ -96,6 +96,11 @@ RETRAIN_INTERVAL_DAYS = 30
 RETRAIN_INTERVAL_HOURS = 24  # periodic background refit cadence (after a successful poll)
 TGP_LAG_DAYS = 10  # wholesale (Singapore-Mogas-derived) TGP → retail pass-through window
 
+# FuelWatch publishes tomorrow's prices after ~14:30 AWST (retailers lodge by
+# 14:00). Fetch + refit 30 min later so the model trains on the freshest data.
+POST_PUBLICATION_REFRESH_HOUR = 15
+POST_PUBLICATION_REFRESH_MINUTE = 0
+
 # --- Storage (under HA config dir: <config>/fuel_predictor_wa/<entry_id>/) ---
 STORAGE_DIRNAME = "fuel_predictor_wa"
 MODEL_FILENAME = "model.pkl"
