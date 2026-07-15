@@ -41,9 +41,15 @@ These are the deferred enhancements, in rough priority order.
 
 ## Accuracy
 
-- **Live-cycle-amplitude blend.** The empirical fade curve is a static
-  historical average; blending in the most-recent cycle's observed amplitude
-  should sharpen the fade and push cheapest-day accuracy higher.
+- **Live-cycle-amplitude blend — tested, not shipped.** Global recency-weighting
+  of the fade curve (exponential per-row decay, half-life swept 4–24 cycles) was
+  backtested on 24 months of real ULP data: it improved post-hike MAE (~−0.7
+  c/L) but regressed overall MAE at *every* half-life (+0.3–0.6 c/L vs the flat
+  fade's 6.09) and didn't meaningfully move cheapest-day hit-rate (differences
+  within noise on the ~17-origin sample). The post-hike gain costs normal-day
+  accuracy — where the cheapest-day trough lives — so it's the wrong trade for
+  an advisor. **Not shipped.** A *conditional* recency (apply only inside the
+  post-hike window) is a possible follow-up; the global approach is parked.
 - **Hike-hazard model.** A lightweight classifier for next-hike
   timing/probability — the cycle length varies and next-hike timing is partly
   exogenous, which caps single-point cheapest-day accuracy. Would give honest
