@@ -159,9 +159,7 @@ def median_cycle_len(hike_days: list[int]) -> int:
     return max(MIN_CYCLE_LEN, min(MAX_CYCLE_LEN, L))
 
 
-def _tgp_return(
-    tgp_sorted: list[tuple[date, float]], anchor_date: date, lag: int
-) -> float | None:
+def _tgp_return(tgp_sorted: list[tuple[date, float]], anchor_date: date, lag: int) -> float | None:
     """Recent wholesale TGP return over ``lag`` days ending at/before ``anchor_date``.
 
     ``tgp_sorted`` is (date, price) ascending. Returns the fractional change

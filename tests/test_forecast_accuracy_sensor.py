@@ -95,9 +95,7 @@ def _cheapest_sensor(forecast, predictor) -> CheapestDaySensor:
 
 
 def _result(prices: list[float], start: date = date(2026, 7, 14)) -> ForecastResult:
-    points = [
-        DayForecast(start + timedelta(days=i), p, "forecast") for i, p in enumerate(prices)
-    ]
+    points = [DayForecast(start + timedelta(days=i), p, "forecast") for i, p in enumerate(prices)]
     return ForecastResult(points=points, cheapest_day=FuelPricePredictor.cheapest(points))
 
 
