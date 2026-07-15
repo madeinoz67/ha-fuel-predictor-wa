@@ -39,7 +39,11 @@ These are the deferred enhancements, in rough priority order.
   (the real ~120-day test), not the in-fit metrics that go n/a.
 - **Predict-path comments.** Documented the clamp-bound derivation.
 
-## Accuracy
+## Won't implement (parked)
+
+The flat fade is already strong (~6.1 c/L overall MAE, ~41% cheapest-day
+hit-rate, ~3× under the average baseline), and D1 showed accuracy gains are
+hard-won — so the remaining accuracy ideas are parked and will not be pursued:
 
 - **Live-cycle-amplitude blend — tested, not shipped.** Global recency-weighting
   of the fade curve (exponential per-row decay, half-life swept 4–24 cycles) was
@@ -48,14 +52,16 @@ These are the deferred enhancements, in rough priority order.
   fade's 6.09) and didn't meaningfully move cheapest-day hit-rate (differences
   within noise on the ~17-origin sample). The post-hike gain costs normal-day
   accuracy — where the cheapest-day trough lives — so it's the wrong trade for
-  an advisor. **Not shipped.** A *conditional* recency (apply only inside the
-  post-hike window) is a possible follow-up; the global approach is parked.
-- **Hike-hazard model.** A lightweight classifier for next-hike
-  timing/probability — the cycle length varies and next-hike timing is partly
-  exogenous, which caps single-point cheapest-day accuracy. Would give honest
-  uncertainty per forecast day.
-- **Per-station forecasting.** Currently per-product daily-min; per-station
-  would enable "cheapest station N days ahead."
+  an advisor. A *conditional* recency (post-hike window only) is also parked.
+- **Hike-hazard model — won't implement.** A next-hike timing/probability
+  classifier for per-day uncertainty: not worth the complexity — the flat fade
+  already captures the cycle, and next-hike timing is partly exogenous (the
+  cycle length varies), so a classifier wouldn't reliably beat the median-cycle
+  assumption already in use.
+- **Per-station forecasting — won't implement.** Per-station daily-min
+  forecasting ("cheapest station N days ahead") is out of scope for the current
+  cheapest-*day* advisor; per-product daily-min across the catchment is
+  sufficient for the buy-today-or-wait decision.
 
 ## Operational
 
