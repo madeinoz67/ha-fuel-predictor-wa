@@ -66,10 +66,6 @@ MAX_MIN_STATIONS = 200
 # FuelWatch publishes tomorrow's price after ~14:30 AWST; refresh twice daily.
 UPDATE_INTERVAL_MINUTES = 720
 
-# Local daily-append history (under HA config dir) — grows the dataset over
-# time, but predictions work from day one via the bulk CSV seed.
-HISTORY_FILENAME = "fuel_predictor_wa_history.csv"
-
 # FuelWatch reports prices in cents per litre.
 UNIT_CENTS_PER_LITRE = "c/L"
 
@@ -91,7 +87,6 @@ PRODUCT_CSV_DESCRIPTION: dict[int, str] = {
 # --- On-install training tuning ---
 HISTORY_MONTHS_TARGET = 24
 MIN_MONTHS_TO_TRAIN = 3
-MIN_MONTHS_FULL_MODEL = 6  # gates the full HGBR path (~3 cycles min for stable cycle detection)
 RETRAIN_INTERVAL_HOURS = 24  # periodic background refit cadence (after a successful poll)
 TGP_LAG_DAYS = 10  # wholesale (Singapore-Mogas-derived) TGP → retail pass-through window
 

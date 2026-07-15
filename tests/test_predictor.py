@@ -48,6 +48,12 @@ def test_cheapest_picks_minimum_priced_day() -> None:
     assert result.cheapest_price == 175.0
 
 
+def test_cheapest_raises_value_error_on_empty_horizon() -> None:
+    """Defensive guard: empty horizon raises ValueError, not a cryptic IndexError."""
+    with pytest.raises(ValueError):
+        FuelPricePredictor.cheapest([])
+
+
 def test_unfit_forecast_yields_none_prices() -> None:
     """An unfitted predictor must emit None prices (no sklearn import path)."""
     predictor = FuelPricePredictor()

@@ -303,8 +303,16 @@ def main() -> int:
     print("=" * 72)
 
     # ---- Acceptance verdict ------------------------------------------------
-    gate_post = tm.get("post_hike_mae")
-    gate_beats = tm.get("beats_baseline")
+    # Gate on the ROLLING-ORIGIN backtest, not the in-fit walk-forward metrics:
+    # the in-fit post_hike_mae is n/a when its stepped holdout samples no
+    # post-hike days, which falsely fails the gate. The rolling window spans
+    # ~120 days and always populates both metrics.
+    gate_post = rb.get("new_post_hike_mae")
+    gate_beats = (
+        rb.get("new_overall_mae") is not None
+        and rb.get("base_overall_mae") is not None
+        and rb["new_overall_mae"] < rb["base_overall_mae"]
+    )
     post_ok = gate_post is not None and gate_post <= GATE_POST_HIKE_MAE
     beats_ok = bool(gate_beats)
     verdict = "PASS" if (post_ok and beats_ok) else "FAIL"
@@ -313,8 +321,8 @@ def main() -> int:
     print("ACCEPTANCE VERDICT (pure-fade vs average baseline)")
     print("=" * 72)
     print(f"  gate: post_hike_mae <= {GATE_POST_HIKE_MAE} c/L  AND  beats_baseline == True")
-    print(f"  in-fit post_hike_mae   = {_fmt(gate_post)} c/L   -> {'OK' if post_ok else 'MISS'}")
-    print(f"  in-fit beats_baseline  = {gate_beats}            -> {'OK' if beats_ok else 'MISS'}")
+    print(f"  rolling post_hike_mae  = {_fmt(gate_post)} c/L   -> {'OK' if post_ok else 'MISS'}")
+    print(f"  rolling beats_baseline = {gate_beats}            -> {'OK' if beats_ok else 'MISS'}")
     print(f"  rolling overall model  = {_fmt(rb['new_overall_mae'])} c/L")
     print(f"  rolling overall base   = {_fmt(rb['base_overall_mae'])} c/L")
     print(f"\n  >>> VERDICT: {verdict} <<<")

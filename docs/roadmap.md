@@ -29,6 +29,15 @@ These are the deferred enhancements, in rough priority order.
   paired with the actual — drives `sensor.forecast_accuracy` + `mae_by_days_out`.
 - **Per-day forecast entities (Day 1–14)** + the `horizon` attribute
   (`time`/`value` for apexcharts).
+- **Dead-code cleanup.** Removed unused consts (`MIN_MONTHS_FULL_MODEL`,
+  `HISTORY_FILENAME`) and the dormant Yahoo `global_features.py` + its test +
+  spike (superseded by the TGP drift). `history.py` kept as an offline
+  `tools/train.py` helper.
+- **`cheapest()` guard.** An empty horizon now raises `ValueError` (not a
+  cryptic `IndexError`); the type-safe key also cleared the predictor mypy error.
+- **Backtest acceptance gate.** Gates on the rolling-origin MAE / beats-baseline
+  (the real ~120-day test), not the in-fit metrics that go n/a.
+- **Predict-path comments.** Documented the clamp-bound derivation.
 
 ## Accuracy
 
@@ -41,23 +50,6 @@ These are the deferred enhancements, in rough priority order.
   uncertainty per forecast day.
 - **Per-station forecasting.** Currently per-product daily-min; per-station
   would enable "cheapest station N days ahead."
-
-## Cleanup / hardening (low risk)
-
-- **`MIN_MONTHS_FULL_MODEL`** in `const.py` is dead code (the model tier is
-  gated by day-count + hike-count in the predictor) — wire it in or drop it.
-- **`cheapest()`** raises on an empty `points` list — defensive `None` guard
-  (coordinator always passes a non-empty horizon, so non-blocking).
-- **Predict-path comments** — document the clamp-bound derivation.
-- **Backtest gate reporting** — `tools/backtest.py` prints `VERDICT: FAIL`
-  because it reads the in-fit `post_hike_mae` (n/a when the stepped holdout
-  samples no post-hike days). Point the printed gate at the rolling-origin
-  `post_hike_mae`.
-- **`global_features.py`** (Yahoo RBOB/Brent/AUD) and `history.py` are
-  **offline-only** helpers (used by `tools/` spikes + `tests/`), not in the
-  runtime path. The Yahoo global-features idea was superseded by the wholesale
-  TGP drift; decide whether to revive the Yahoo path or delete the dormant
-  scaffold + its test.
 
 ## Operational
 

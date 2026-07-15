@@ -495,10 +495,21 @@ class FuelPricePredictor:
     # ---- cheapest (static) ------------------------------------------------
     @staticmethod
     def cheapest(points: list[DayForecast]) -> DayForecast:
-        """Pick the cheapest day, preferring priced points."""
+        """Pick the cheapest day, preferring priced points.
+
+        Raises ``ValueError`` on an empty horizon — the coordinator always
+        passes a non-empty ``points`` list, so this is a defensive guard
+        (replaces a cryptic ``IndexError`` from ``points[0]``).
+        """
+        if not points:
+            raise ValueError("cheapest() requires a non-empty horizon")
         priced = [p for p in points if p.price_cpl is not None]
         if priced:
-            return min(priced, key=lambda p: p.price_cpl)
+            # priced[] has non-None price_cpl by construction; the `else inf`
+            # arm never fires, it just gives mypy an orderable key type.
+            return min(
+                priced, key=lambda p: p.price_cpl if p.price_cpl is not None else float("inf")
+            )
         return points[0]
 
     # ---- internal: degraded-tier predict ----------------------------------
@@ -575,6 +586,11 @@ class FuelPricePredictor:
             anchor_price = float(self._latest_price) if self._latest_price is not None else 0.0
 
         L = self._L
+        # Clamp the forecast to the recent observed band so drift (fade shape +
+        # TGP) can't push a prediction beyond ~15% of the trailing 28-day range.
+        # _min28/_max28 are the trailing-28d min/max captured at fit; CLAMP_LO/
+        # CLAMP_HI (0.85/1.15) give 15% headroom. Without this, a stale anchor or
+        # out-of-distribution TGP return could forecast an implausible price.
         lo_clamp = CLAMP_LO * self._min28
         hi_clamp = CLAMP_HI * self._max28
 
